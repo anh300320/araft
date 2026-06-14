@@ -1,0 +1,26 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="GoResourceLeak" enabled="true" level="WARNING" enabled_by_default="true">
+      <methods>
+        <method importPath="net/http" receiver="*Client" name="Post" />
+      </methods>
+    </inspection_tool>
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <value>
+          <list size="8">
+            <item index="0" class="java.lang.String" itemvalue="beautifulsoup4" />
+            <item index="1" class="java.lang.String" itemvalue="fsspec" />
+            <item index="2" class="java.lang.String" itemvalue="pyarrow" />
+            <item index="3" class="java.lang.String" itemvalue="elasticsearch" />
+            <item index="4" class="java.lang.String" itemvalue="qrcode" />
+            <item index="5" class="java.lang.String" itemvalue="SQLAlchemy" />
+            <item index="6" class="java.lang.String" itemvalue="gcsfs" />
+            <item index="7" class="java.lang.String" itemvalue="docx2pdf" />
+          </list>
+        </value>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
