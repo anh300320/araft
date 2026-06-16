@@ -1,7 +1,7 @@
-package raft
+package common
 
 type LogEntry struct {
 	Id   LogIndex
 	Term Term
-	data LogData
+	Data LogData
 }

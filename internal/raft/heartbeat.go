@@ -1,6 +1,10 @@
 package raft
 
-import "time"
+import (
+	"time"
+
+	"github.com/anh300320/araft/internal/raft/protocol"
+)
 
 type HeartBeat struct {
 	lastBeatAt time.Time
@@ -13,7 +17,7 @@ func (h *HeartBeat) Beat(leader *Raft, followers []Raft) error {
 
 func (h *HeartBeat) beat(leader *Raft, followers []Raft, rateMs int) error {
 	for {
-		heartBeatMessage := AppendEntriesRequest{
+		heartBeatMessage := protocol.AppendEntriesRequest{
 			MasterID:     leader.serverID,
 			PrevLogIndex: leader.commitId,
 			PrevLogTerm:  leader.currentTerm,
