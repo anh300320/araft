@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/anh300320/araft/internal/raft"
-	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/protocol"
 )
 
@@ -31,7 +30,6 @@ func (f *Follower) monitorHeartBeat() {
 	for {
 		if time.Now().Sub(f.lastHeartBeatAt) > f.electionTimeout {
 			prevCandidateState := &PreCandidate{
-				NextTerm:     f.raft.GetCurrentTerm(),
 				LastLogIndex: 0,
 				LastLogTerm:  0,
 				others:       f.raft.GetOthers(),
@@ -61,12 +59,17 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (protocol.VoteRespon
 }
 
 func (f *Follower) HandlePreVote(request protocol.PreVoteRequest) (protocol.PreVoteResponse, error) {
-	if f.raft.GetCurrentTerm() >= request.Term {
-		return protocol.PreVoteResponse{IsSucceeded: false}, nil
-	}
-	return protocol.PreVoteResponse{IsSucceeded: true}, nil
-}
 
-func (f *Follower) GetCurrentTerm() common.Term {
-	return f.raft.GetCurrentTerm()
+	isNewTerm := f.raft.GetCurrentTerm() < request.HypotheticalTerm
+
+	latestLogEntry := f.raft.GetLatestLogEntry()
+	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+
+	isTimeOut := time.Now().Sub(f.lastHeartBeatAt) > f.electionTimeout
+
+	return protocol.PreVoteResponse{
+		Term:    f.raft.GetCurrentTerm(),
+		Granted: isNewTerm && isLogUpToDate && isTimeOut,
+	}, nil
 }

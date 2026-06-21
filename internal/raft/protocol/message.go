@@ -17,10 +17,11 @@ type VoteResponse struct {
 }
 
 type AppendEntriesRequest struct {
-	MasterID     common.ServerID
-	PrevLogIndex common.LogIndex
-	PrevLogTerm  common.Term
-	LogEntry     []common.LogEntry
+	MasterID          common.ServerID
+	PrevLogIndex      common.LogIndex
+	PrevLogTerm       common.Term
+	LeaderCommitIndex common.LogIndex
+	LogEntry          []common.LogEntry
 }
 
 type AppendEntriesResponse struct {
@@ -28,13 +29,16 @@ type AppendEntriesResponse struct {
 }
 
 type PreVoteRequest struct {
-	Term         common.Term
-	LastLogIndex common.LogIndex
-	LastLogTerm  common.Term
+	HypotheticalTerm common.Term
+	serverID         common.ServerID
+	LastLogIndex     common.LogIndex
+	LastLogTerm      common.Term
+	CommitIndex      common.LogIndex
 }
 
 type PreVoteResponse struct {
-	IsSucceeded bool
+	Term    common.Term
+	Granted bool
 }
 
 type Event int
