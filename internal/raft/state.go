@@ -1,13 +1,11 @@
 package raft
 
 import (
-	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/protocol"
 )
 
 type State interface {
 	Run()
-	GetCurrentTerm() common.Term
 	GetTransition() chan State
 
 	HandleHeartBeat(request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error)
