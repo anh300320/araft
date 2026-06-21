@@ -17,10 +17,6 @@ func (c *Candidate) Run() {
 	return
 }
 
-func (c *Candidate) GetCurrentTerm() common.Term {
-	return c.currentTerm
-}
-
 func (c *Candidate) HandleHeartBeat(request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
 	return protocol.AppendEntriesResponse{IsSucceeded: false}, nil
 }
@@ -34,7 +30,16 @@ func (c *Candidate) HandleVote(request protocol.VoteRequest) (protocol.VoteRespo
 }
 
 func (c *Candidate) HandlePreVote(request protocol.PreVoteRequest) (protocol.PreVoteResponse, error) {
-	return protocol.PreVoteResponse{}, nil
+	isNewTerm := c.raft.GetCurrentTerm() < request.HypotheticalTerm
+
+	latestLogEntry := c.raft.GetLatestLogEntry()
+	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+
+	return protocol.PreVoteResponse{
+		Term:    c.raft.GetCurrentTerm(),
+		Granted: isNewTerm && isLogUpToDate,
+	}, nil
 }
 
 func (c *Candidate) GetTransition() chan raft.State {
