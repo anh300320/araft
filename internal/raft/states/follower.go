@@ -5,6 +5,7 @@ import (
 
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/protocol"
+	"go.uber.org/zap"
 )
 
 type Follower struct {
@@ -53,6 +54,51 @@ func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (p
 }
 
 func (f *Follower) HandleVote(request protocol.VoteRequest) (protocol.VoteResponse, error) {
+	if request.Term < f.raft.GetCurrentTerm() {
+		return protocol.VoteResponse{
+			Term:        f.raft.GetCurrentTerm(),
+			VoteGranted: false,
+		}, nil
+	}
+
+	if request.Term > f.raft.GetCurrentTerm() {
+		err := f.raft.UpgradeTerm(request.Term)
+		if err != nil {
+			f.raft.Logger.Error("failed to assign new term", zap.Error(err))
+			return protocol.VoteResponse{
+				Term:        f.raft.GetCurrentTerm(),
+				VoteGranted: false,
+			}, err
+		}
+	}
+
+	if f.raft.GetVotedFor() != 0 && f.raft.GetVotedFor() != request.CandidateID {
+		return protocol.VoteResponse{
+			Term:        f.raft.GetCurrentTerm(),
+			VoteGranted: false,
+		}, nil
+	}
+
+	latestLogEntry := f.raft.GetLatestLogEntry()
+	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+
+	if isLogUpToDate {
+		err := f.raft.SetVotedFor(request.CandidateID)
+		if err != nil {
+			return protocol.VoteResponse{
+				Term:        f.raft.GetCurrentTerm(),
+				VoteGranted: false,
+			}, err
+		}
+		f.resetElectionTimer()
+
+		return protocol.VoteResponse{
+			Term:        f.raft.GetCurrentTerm(),
+			VoteGranted: true,
+		}, nil
+	}
+
 	return protocol.VoteResponse{
 		Term:        f.raft.GetCurrentTerm(),
 		VoteGranted: false,
@@ -73,6 +119,10 @@ func (f *Follower) HandlePreVote(request protocol.PreVoteRequest) (protocol.PreV
 		Term:    f.raft.GetCurrentTerm(),
 		Granted: isNewTerm && isLogUpToDate && isTimeOut,
 	}, nil
+}
+
+func (f *Follower) resetElectionTimer() {
+	f.lastHeartBeatAt = time.Now()
 }
 
 func (f *Follower) Close() error {

@@ -2,6 +2,7 @@ package states
 
 import (
 	"sync"
+	"time"
 
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/common"
@@ -69,7 +70,15 @@ func (p *PreCandidate) HandlePreVoteResponses(responses chan protocol.PreVoteRes
 					raft:       p.raft,
 					transition: make(chan raft.State),
 				}
+
+				p.raft.ResetVotedFor()
+				err := p.raft.SetVotedFor(p.raft.GetServerID())
+				if err != nil {
+					p.raft.Logger.Error("failed to update voted for", zap.Error(err))
+					continue
+				}
 				transitionSignal <- candidateState
+				break
 			}
 		}
 	}
@@ -84,8 +93,60 @@ func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest
 }
 
 func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (protocol.VoteResponse, error) {
+	if request.Term < p.raft.GetCurrentTerm() {
+		return protocol.VoteResponse{
+			Term:        p.raft.GetCurrentTerm(),
+			VoteGranted: false,
+		}, nil
+	}
+
+	// Revert to follower if the Candidate's term >= self term.
+	defer func() {
+		nextState := &Follower{
+			raft:            p.raft,
+			lastHeartBeatAt: time.Now(),
+			monitorInterval: 0, // TODO
+			electionTimeout: 0, // TODO
+			isRunning:       true,
+			transition:      make(chan raft.State),
+		}
+		p.transition <- nextState
+	}()
+
+	latestLogEntry := p.raft.GetLatestLogEntry()
+	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+	if request.Term == p.raft.GetCurrentTerm() {
+		if isLogUpToDate {
+			err := p.raft.SetVotedFor(request.CandidateID)
+			if err != nil {
+				return protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: false}, err
+			}
+			return protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: true}, nil
+		}
+	}
+
+	if request.Term > p.raft.GetCurrentTerm() {
+		err := p.raft.UpgradeTerm(request.Term)
+		if err != nil {
+			p.raft.Logger.Error("failed to upgrade term", zap.Error(err))
+			return protocol.VoteResponse{
+				Term:        p.raft.GetCurrentTerm(),
+				VoteGranted: false,
+			}, err
+		}
+
+		if isLogUpToDate {
+			err = p.raft.SetVotedFor(request.CandidateID)
+			if err != nil {
+				return protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: false}, err
+			}
+			return protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: true}, nil
+		}
+	}
+
 	return protocol.VoteResponse{
-		Term:        p.getHypotheticalTerm(),
+		Term:        p.raft.GetCurrentTerm(),
 		VoteGranted: false,
 	}, nil
 }

@@ -1,6 +1,8 @@
 package raft
 
 import (
+	"errors"
+
 	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/protocol"
 	"github.com/anh300320/araft/internal/raft/transport"
@@ -10,7 +12,7 @@ import (
 type Raft struct {
 	serverID    common.ServerID
 	currentTerm common.Term
-	votedFor    string
+	votedFor    common.ServerID
 	logs        []common.LogEntry
 
 	// Volatile states
@@ -62,6 +64,10 @@ func (r *Raft) Run() {
 	}
 }
 
+func (r *Raft) GetServerID() common.ServerID {
+	return r.serverID
+}
+
 func (r *Raft) GetCurrentTerm() common.Term {
 	return r.currentTerm
 }
@@ -83,7 +89,46 @@ func (r *Raft) GetLogEntry(logIndex common.LogIndex) common.LogEntry {
 }
 
 func (r *Raft) GetLatestLogEntry() common.LogEntry {
+	if len(r.logs) == 0 {
+		return common.LogEntry{ // TODO: ?
+			Id:   0,
+			Term: 0,
+		}
+	}
 	return r.logs[len(r.logs)-1]
+}
+
+func (r *Raft) SetTerm(newTerm common.Term) error {
+	if newTerm <= r.currentTerm {
+		return errors.New("failed to assign new term, the new term should be greater than the current term")
+	}
+	r.currentTerm = newTerm
+	return nil
+}
+
+func (r *Raft) UpgradeTerm(term common.Term) error {
+	err := r.SetTerm(term) // TODO implement atomicity for these function
+	if err != nil {
+		return err
+	}
+	r.ResetVotedFor()
+	return nil
+}
+
+func (r *Raft) SetVotedFor(candidateID common.ServerID) error {
+	if r.votedFor != 0 && r.votedFor != candidateID {
+		return errors.New("failed to assign vote, already voted")
+	}
+	r.votedFor = candidateID
+	return nil
+}
+
+func (r *Raft) ResetVotedFor() {
+	r.votedFor = 0
+}
+
+func (r *Raft) GetVotedFor() common.ServerID {
+	return r.votedFor
 }
 
 func (r *Raft) handleMessage(msg protocol.EventMessage) error {
