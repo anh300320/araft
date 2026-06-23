@@ -35,7 +35,7 @@ func (p *PreCandidate) sendPreVotes(responses chan protocol.PreVoteResponse) {
 	var wg sync.WaitGroup
 	for _, other := range p.others {
 		request := protocol.PreVoteRequest{
-			HypotheticalTerm: p.raft.GetCurrentTerm() + 1,
+			HypotheticalTerm: p.getHypotheticalTerm(),
 			LastLogIndex:     p.LastLogIndex,
 			LastLogTerm:      p.LastLogTerm,
 		}
@@ -68,7 +68,7 @@ func (p *PreCandidate) HandlePreVoteResponses(responses chan protocol.PreVoteRes
 			successCount += 1
 			if successCount >= common.GetMajorityCount(len(p.others)) {
 				candidateState := &Candidate{
-					currentTerm: p.raft.GetCurrentTerm() + 1,
+					currentTerm: p.getHypotheticalTerm(),
 					transition:  make(chan raft.State),
 				}
 				transitionSignal <- candidateState
@@ -87,11 +87,24 @@ func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest
 
 func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (protocol.VoteResponse, error) {
 	return protocol.VoteResponse{
-		Term:        p.raft.GetCurrentTerm() + 1,
+		Term:        p.getHypotheticalTerm(),
 		VoteGranted: false,
 	}, nil
 }
 
 func (p *PreCandidate) HandlePreVote(request protocol.PreVoteRequest) (protocol.PreVoteResponse, error) {
-	return protocol.PreVoteResponse{Granted: false}, nil
+	isGreaterTerm := request.HypotheticalTerm > p.raft.GetCurrentTerm()
+
+	latestLogEntry := p.raft.GetLatestLogEntry()
+	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+
+	return protocol.PreVoteResponse{
+		Term:    p.raft.GetCurrentTerm(),
+		Granted: isGreaterTerm && isLogUpToDate,
+	}, nil
+}
+
+func (p *PreCandidate) getHypotheticalTerm() common.Term {
+	return p.raft.GetCurrentTerm() + 1
 }
