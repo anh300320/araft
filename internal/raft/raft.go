@@ -32,9 +32,17 @@ type Raft struct {
 }
 
 func (r *Raft) Run() {
+	go r.HandleMessage()
+
 	for {
 		go r.state.Run()
-		r.state = <-r.state.GetTransition()
+		nextState := <-r.state.GetTransition()
+		oldState := r.state // TODO concurrency control here else it can cause issues in lines 82 -> 113.
+		r.state = nextState
+		err := oldState.Close()
+		if err != nil {
+			r.Logger.Error("failed to close the old state", zap.Error(err))
+		}
 	}
 }
 

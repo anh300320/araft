@@ -20,8 +20,6 @@ type PreCandidate struct {
 }
 
 func (p *PreCandidate) Run() {
-	go p.raft.HandleMessage()
-
 	responses := make(chan protocol.PreVoteResponse, len(p.others))
 	p.sendPreVotes(responses)
 	p.HandlePreVoteResponses(responses, p.transition)
@@ -68,8 +66,8 @@ func (p *PreCandidate) HandlePreVoteResponses(responses chan protocol.PreVoteRes
 			successCount += 1
 			if successCount >= common.GetMajorityCount(len(p.others)) {
 				candidateState := &Candidate{
-					currentTerm: p.getHypotheticalTerm(),
-					transition:  make(chan raft.State),
+					raft:       p.raft,
+					transition: make(chan raft.State),
 				}
 				transitionSignal <- candidateState
 			}
@@ -107,4 +105,9 @@ func (p *PreCandidate) HandlePreVote(request protocol.PreVoteRequest) (protocol.
 
 func (p *PreCandidate) getHypotheticalTerm() common.Term {
 	return p.raft.GetCurrentTerm() + 1
+}
+
+func (p *PreCandidate) Close() error {
+	close(p.transition)
+	return nil
 }

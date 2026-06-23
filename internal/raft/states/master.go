@@ -51,3 +51,7 @@ func (m *Master) HandlePreVote(request protocol.PreVoteRequest) (protocol.PreVot
 		Granted: isGreaterTerm && isLogUpToDate,
 	}, nil
 }
+
+func (m *Master) Close() error {
+	return nil
+}

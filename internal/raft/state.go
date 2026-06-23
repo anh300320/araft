@@ -12,6 +12,7 @@ type State interface {
 	HandleAppendEntries(request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error)
 	HandleVote(request protocol.VoteRequest) (protocol.VoteResponse, error)
 	HandlePreVote(request protocol.PreVoteRequest) (protocol.PreVoteResponse, error)
+	Close() error
 }
 
 type TransitionSignal int
