@@ -14,7 +14,7 @@ type Raft struct {
 	logs        []common.LogEntry
 
 	// Volatile states
-	commitId    common.LogIndex
+	commitIndex common.LogIndex
 	lastApplied common.LogIndex
 
 	state  State
@@ -46,8 +46,20 @@ func (r *Raft) GetOthers() []transport.Transport {
 	return r.others
 }
 
+func (r *Raft) GetCommitIndex() common.LogIndex {
+	return r.commitIndex
+}
+
 func (r *Raft) GetTransport() transport.Transport {
 	return r.transport
+}
+
+func (r *Raft) GetLogEntry(logIndex common.LogIndex) common.LogEntry {
+	return r.logs[logIndex]
+}
+
+func (r *Raft) GetLatestLogEntry() common.LogEntry {
+	return r.logs[len(r.logs)-1]
 }
 
 func (r *Raft) HandleMessage() {
@@ -93,22 +105,3 @@ func (r *Raft) HandleMessage() {
 		}
 	}
 }
-
-//func (r *Raft) changeState(signal TransitionSignal) error {
-//	switch signal {
-//	case TransitionSignalFollower:
-//		httpTransport := transport.HttpTransport{}
-//		r.state = states.NewFollowerState(
-//			r.currentTerm,
-//			httpTransport,
-//			r.logger,
-//			50,  // TODO: load from config file
-//			150, // TODO: load from config file
-//		)
-//	case TransitionSignalCandidate:
-//		return nil // TODO implement
-//	case TransitionSignalLeader:
-//		return nil // TODO implement
-//	}
-//	return nil
-//}

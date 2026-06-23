@@ -12,7 +12,6 @@ import (
 
 type PreCandidate struct {
 	raft         *raft.Raft
-	NextTerm     common.Term
 	LastLogIndex common.LogIndex
 	LastLogTerm  common.Term
 
@@ -36,9 +35,9 @@ func (p *PreCandidate) sendPreVotes(responses chan protocol.PreVoteResponse) {
 	var wg sync.WaitGroup
 	for _, other := range p.others {
 		request := protocol.PreVoteRequest{
-			Term:         p.NextTerm,
-			LastLogIndex: p.LastLogIndex,
-			LastLogTerm:  p.LastLogTerm,
+			HypotheticalTerm: p.raft.GetCurrentTerm() + 1,
+			LastLogIndex:     p.LastLogIndex,
+			LastLogTerm:      p.LastLogTerm,
 		}
 		wg.Add(1)
 		go func() {
@@ -65,7 +64,7 @@ func (p *PreCandidate) sendPreVotes(responses chan protocol.PreVoteResponse) {
 func (p *PreCandidate) HandlePreVoteResponses(responses chan protocol.PreVoteResponse, transitionSignal chan raft.State) {
 	successCount := 0
 	for preVoteResponse := range responses {
-		if preVoteResponse.IsSucceeded {
+		if preVoteResponse.Granted {
 			successCount += 1
 			if successCount >= common.GetMajorityCount(len(p.others)) {
 				candidateState := &Candidate{
@@ -88,15 +87,11 @@ func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest
 
 func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (protocol.VoteResponse, error) {
 	return protocol.VoteResponse{
-		Term:        p.NextTerm,
+		Term:        p.raft.GetCurrentTerm() + 1,
 		VoteGranted: false,
 	}, nil
 }
 
 func (p *PreCandidate) HandlePreVote(request protocol.PreVoteRequest) (protocol.PreVoteResponse, error) {
-	return protocol.PreVoteResponse{IsSucceeded: true}, nil
-}
-
-func (p *PreCandidate) GetCurrentTerm() common.Term {
-	return p.NextTerm
+	return protocol.PreVoteResponse{Granted: false}, nil
 }
