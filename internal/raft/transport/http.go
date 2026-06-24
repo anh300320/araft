@@ -19,6 +19,16 @@ type HttpTransport struct {
 	events   chan protocol.EventMessage
 }
 
+func (t *HttpTransport) AppendEntries(other Transport, request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (t *HttpTransport) SendVote(other Transport, request protocol.VoteRequest) (protocol.VoteResponse, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (t *HttpTransport) GetAddress() string {
 	return t.hostName + strconv.Itoa(int(t.port))
 }
@@ -36,6 +46,7 @@ func handleHttpRequest[TReq any, TRes any](t *HttpTransport, event protocol.Even
 		Body:         request,
 		ResponseChan: make(chan any),
 	}
+	defer close(newEvent.ResponseChan)
 	t.events <- newEvent
 	resp := <-newEvent.ResponseChan
 	w.Header().Set("Content-Type", "application/json")
@@ -86,12 +97,12 @@ func (t *HttpTransport) StartListening() (chan protocol.EventMessage, error) {
 	return t.events, nil
 }
 
-func (t *HttpTransport) SendHeartBeat(other Transport, request protocol.AppendEntriesRequest) (*protocol.AppendEntriesResponse, error) {
+func (t *HttpTransport) SendHeartBeat(other Transport, request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
 		msg := fmt.Sprintf("failed to marshal heartbeat message: %s", err.Error())
 		t.logger.Error(msg)
-		return nil, SerializeMessageError
+		return protocol.AppendEntriesResponse{IsSucceeded: false}, SerializeMessageError
 	}
 
 	t.logger.Info(
@@ -107,17 +118,17 @@ func (t *HttpTransport) SendHeartBeat(other Transport, request protocol.AppendEn
 	var appendEntriesResponse protocol.AppendEntriesResponse
 	err = json.NewDecoder(resp.Body).Decode(&appendEntriesResponse)
 	if err != nil {
-		return nil, HeartBeatMessageError
+		return appendEntriesResponse, HeartBeatMessageError
 	}
-	return &appendEntriesResponse, nil
+	return appendEntriesResponse, nil
 }
 
-func (t *HttpTransport) SendPreVote(other Transport, request protocol.PreVoteRequest) (*protocol.PreVoteResponse, error) {
+func (t *HttpTransport) SendPreVote(other Transport, request protocol.PreVoteRequest) (protocol.PreVoteResponse, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
 		msg := fmt.Sprintf("failed to marshal pre-vote message: %s", err.Error())
 		t.logger.Error(msg)
-		return nil, SerializeMessageError
+		return protocol.PreVoteResponse{}, SerializeMessageError
 	}
 	t.logger.Info(
 		"sending pre-votes",
@@ -132,7 +143,7 @@ func (t *HttpTransport) SendPreVote(other Transport, request protocol.PreVoteReq
 	var preVoteResponse protocol.PreVoteResponse
 	err = json.NewDecoder(resp.Body).Decode(&preVoteResponse)
 	if err != nil {
-		return nil, HeartBeatMessageError
+		return preVoteResponse, HeartBeatMessageError
 	}
-	return &preVoteResponse, nil
+	return preVoteResponse, nil
 }

@@ -11,14 +11,15 @@ type Follower struct {
 	raft *raft.Raft
 
 	lastHeartBeatAt time.Time
-
 	monitorInterval time.Duration
 	electionTimeout time.Duration
-	transition      chan raft.State
+	isRunning       bool
+
+	transition chan raft.State
 }
 
 func (f *Follower) Run() {
-	go f.raft.HandleMessage()
+	f.isRunning = true
 	go f.monitorHeartBeat()
 }
 
@@ -27,7 +28,7 @@ func (f *Follower) GetTransition() chan raft.State {
 }
 
 func (f *Follower) monitorHeartBeat() {
-	for {
+	for f.isRunning {
 		if time.Now().Sub(f.lastHeartBeatAt) > f.electionTimeout {
 			prevCandidateState := &PreCandidate{
 				LastLogIndex: 0,
@@ -72,4 +73,10 @@ func (f *Follower) HandlePreVote(request protocol.PreVoteRequest) (protocol.PreV
 		Term:    f.raft.GetCurrentTerm(),
 		Granted: isNewTerm && isLogUpToDate && isTimeOut,
 	}, nil
+}
+
+func (f *Follower) Close() error {
+	close(f.transition)
+	f.isRunning = false
+	return nil
 }

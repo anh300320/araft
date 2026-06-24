@@ -2,18 +2,15 @@ package states
 
 import (
 	"github.com/anh300320/araft/internal/raft"
-	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/protocol"
 )
 
 type Candidate struct {
-	raft        *raft.Raft
-	currentTerm common.Term
-	transition  chan raft.State
+	raft       *raft.Raft
+	transition chan raft.State
 }
 
 func (c *Candidate) Run() {
-	go c.raft.HandleMessage()
 	return
 }
 
@@ -44,4 +41,9 @@ func (c *Candidate) HandlePreVote(request protocol.PreVoteRequest) (protocol.Pre
 
 func (c *Candidate) GetTransition() chan raft.State {
 	return c.transition
+}
+
+func (c *Candidate) Close() error {
+	close(c.transition)
+	return nil
 }
