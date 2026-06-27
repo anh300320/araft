@@ -8,10 +8,10 @@ type State interface {
 	Run()
 	GetTransition() chan State
 
-	HandleHeartBeat(request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error)
-	HandleAppendEntries(request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error)
-	HandleVote(request protocol.VoteRequest) (protocol.VoteResponse, error)
-	HandlePreVote(request protocol.PreVoteRequest) (protocol.PreVoteResponse, error)
+	HandleHeartBeat(request protocol.AppendEntriesRequest) (State, protocol.AppendEntriesResponse, error)
+	HandleAppendEntries(request protocol.AppendEntriesRequest) (State, protocol.AppendEntriesResponse, error)
+	HandleVote(request protocol.VoteRequest) (State, protocol.VoteResponse, error)
+	HandlePreVote(request protocol.PreVoteRequest) (State, protocol.PreVoteResponse, error)
 	Close() error
 }
 
