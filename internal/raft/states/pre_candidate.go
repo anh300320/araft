@@ -84,34 +84,39 @@ func (p *PreCandidate) HandlePreVoteResponses(responses chan protocol.PreVoteRes
 	}
 }
 
-func (p *PreCandidate) HandleHeartBeat(request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
-	return protocol.AppendEntriesResponse{IsSucceeded: true}, nil
+func (p *PreCandidate) HandleHeartBeat(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
+	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
 }
 
-func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
-	return protocol.AppendEntriesResponse{IsSucceeded: true}, nil
+func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
+	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
 }
 
-func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (protocol.VoteResponse, error) {
+func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (raft.State, protocol.VoteResponse, error) {
 	if request.Term < p.raft.GetCurrentTerm() {
-		return protocol.VoteResponse{
+		return nil, protocol.VoteResponse{
 			Term:        p.raft.GetCurrentTerm(),
 			VoteGranted: false,
 		}, nil
 	}
 
 	// Revert to follower if the Candidate's term >= self term.
-	defer func() {
+	if request.Term > p.raft.GetCurrentTerm() {
 		nextState := &Follower{
 			raft:            p.raft,
 			lastHeartBeatAt: time.Now(),
-			monitorInterval: 0, // TODO
-			electionTimeout: 0, // TODO
-			isRunning:       true,
+			monitorInterval: 0,
+			electionTimeout: 0,
+			isRunning:       false,
 			transition:      make(chan raft.State),
 		}
-		p.transition <- nextState
-	}()
+		err := p.raft.UpgradeTerm(request.Term)
+		if err != nil {
+			p.raft.Logger.Error("failed to upgrade term", zap.Error(err))
+			return nextState, protocol.VoteResponse{}, err
+		}
+		return nextState, protocol.VoteResponse{}, nil
+	}
 
 	latestLogEntry := p.raft.GetLatestLogEntry()
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
@@ -120,45 +125,26 @@ func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (protocol.VoteRe
 		if isLogUpToDate {
 			err := p.raft.SetVotedFor(request.CandidateID)
 			if err != nil {
-				return protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: false}, err
+				return nil, protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: false}, err
 			}
-			return protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: true}, nil
+			return nil, protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: true}, nil
 		}
 	}
 
-	if request.Term > p.raft.GetCurrentTerm() {
-		err := p.raft.UpgradeTerm(request.Term)
-		if err != nil {
-			p.raft.Logger.Error("failed to upgrade term", zap.Error(err))
-			return protocol.VoteResponse{
-				Term:        p.raft.GetCurrentTerm(),
-				VoteGranted: false,
-			}, err
-		}
-
-		if isLogUpToDate {
-			err = p.raft.SetVotedFor(request.CandidateID)
-			if err != nil {
-				return protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: false}, err
-			}
-			return protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: true}, nil
-		}
-	}
-
-	return protocol.VoteResponse{
+	return nil, protocol.VoteResponse{
 		Term:        p.raft.GetCurrentTerm(),
 		VoteGranted: false,
 	}, nil
 }
 
-func (p *PreCandidate) HandlePreVote(request protocol.PreVoteRequest) (protocol.PreVoteResponse, error) {
-	isGreaterTerm := request.HypotheticalTerm > p.raft.GetCurrentTerm()
+func (p *PreCandidate) HandlePreVote(request protocol.PreVoteRequest) (raft.State, protocol.PreVoteResponse, error) {
+	isGreaterTerm := request.HypotheticalTerm >= p.raft.GetCurrentTerm()
 
 	latestLogEntry := p.raft.GetLatestLogEntry()
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
 		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
 
-	return protocol.PreVoteResponse{
+	return nil, protocol.PreVoteResponse{
 		Term:    p.raft.GetCurrentTerm(),
 		Granted: isGreaterTerm && isLogUpToDate,
 	}, nil
