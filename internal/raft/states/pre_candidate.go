@@ -2,6 +2,7 @@ package states
 
 import (
 	"sync"
+	"time"
 
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/common"
@@ -69,35 +70,81 @@ func (p *PreCandidate) HandlePreVoteResponses(responses chan protocol.PreVoteRes
 					raft:       p.raft,
 					transition: make(chan raft.State),
 				}
+
+				p.raft.ResetVotedFor()
+				err := p.raft.SetVotedFor(p.raft.GetServerID())
+				if err != nil {
+					p.raft.Logger.Error("failed to update voted for", zap.Error(err))
+					continue
+				}
 				transitionSignal <- candidateState
+				break
 			}
 		}
 	}
 }
 
-func (p *PreCandidate) HandleHeartBeat(request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
-	return protocol.AppendEntriesResponse{IsSucceeded: true}, nil
+func (p *PreCandidate) HandleHeartBeat(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
+	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
 }
 
-func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
-	return protocol.AppendEntriesResponse{IsSucceeded: true}, nil
+func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
+	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
 }
 
-func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (protocol.VoteResponse, error) {
-	return protocol.VoteResponse{
-		Term:        p.getHypotheticalTerm(),
+func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (raft.State, protocol.VoteResponse, error) {
+	if request.Term < p.raft.GetCurrentTerm() {
+		return nil, protocol.VoteResponse{
+			Term:        p.raft.GetCurrentTerm(),
+			VoteGranted: false,
+		}, nil
+	}
+
+	// Revert to follower if the Candidate's term >= self term.
+	if request.Term > p.raft.GetCurrentTerm() {
+		nextState := &Follower{
+			raft:            p.raft,
+			lastHeartBeatAt: time.Now(),
+			monitorInterval: 0,
+			electionTimeout: 0,
+			isRunning:       false,
+			transition:      make(chan raft.State),
+		}
+		err := p.raft.UpgradeTerm(request.Term)
+		if err != nil {
+			p.raft.Logger.Error("failed to upgrade term", zap.Error(err))
+			return nextState, protocol.VoteResponse{}, err
+		}
+		return nextState, protocol.VoteResponse{}, nil
+	}
+
+	latestLogEntry := p.raft.GetLatestLogEntry()
+	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+	if request.Term == p.raft.GetCurrentTerm() {
+		if isLogUpToDate && p.raft.IsAbleToVoteFor(request.CandidateID) {
+			err := p.raft.SetVotedFor(request.CandidateID)
+			if err != nil {
+				return nil, protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: false}, err
+			}
+			return nil, protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: true}, nil
+		}
+	}
+
+	return nil, protocol.VoteResponse{
+		Term:        p.raft.GetCurrentTerm(),
 		VoteGranted: false,
 	}, nil
 }
 
-func (p *PreCandidate) HandlePreVote(request protocol.PreVoteRequest) (protocol.PreVoteResponse, error) {
-	isGreaterTerm := request.HypotheticalTerm > p.raft.GetCurrentTerm()
+func (p *PreCandidate) HandlePreVote(request protocol.PreVoteRequest) (raft.State, protocol.PreVoteResponse, error) {
+	isGreaterTerm := request.HypotheticalTerm >= p.raft.GetCurrentTerm()
 
 	latestLogEntry := p.raft.GetLatestLogEntry()
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
 		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
 
-	return protocol.PreVoteResponse{
+	return nil, protocol.PreVoteResponse{
 		Term:    p.raft.GetCurrentTerm(),
 		Granted: isGreaterTerm && isLogUpToDate,
 	}, nil

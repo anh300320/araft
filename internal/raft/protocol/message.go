@@ -5,8 +5,8 @@ import (
 )
 
 type VoteRequest struct {
-	Term         common.Term
 	CandidateID  common.ServerID
+	Term         common.Term
 	LastLogIndex common.LogIndex
 	LastLogTerm  common.Term
 }
