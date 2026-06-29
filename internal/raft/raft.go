@@ -111,11 +111,15 @@ func (r *Raft) UpgradeTerm(term common.Term) error {
 }
 
 func (r *Raft) SetVotedFor(candidateID common.ServerID) error {
-	if r.votedFor != 0 && r.votedFor != candidateID {
+	if r.IsAbleToVoteFor(candidateID) {
 		return errors.New("failed to assign vote, already voted")
 	}
 	r.votedFor = candidateID
 	return nil
+}
+
+func (r *Raft) IsAbleToVoteFor(candidateID common.ServerID) bool {
+	return r.votedFor == 0 || r.votedFor == candidateID
 }
 
 func (r *Raft) ResetVotedFor() {

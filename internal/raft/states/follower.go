@@ -72,7 +72,7 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (raft.State, protoco
 		}
 	}
 
-	if f.raft.GetVotedFor() != 0 && f.raft.GetVotedFor() != request.CandidateID {
+	if !f.raft.IsAbleToVoteFor(request.CandidateID) {
 		return nil, protocol.VoteResponse{
 			Term:        f.raft.GetCurrentTerm(),
 			VoteGranted: false,

@@ -122,7 +122,7 @@ func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (raft.State, pro
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
 		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
 	if request.Term == p.raft.GetCurrentTerm() {
-		if isLogUpToDate {
+		if isLogUpToDate && p.raft.IsAbleToVoteFor(request.CandidateID) {
 			err := p.raft.SetVotedFor(request.CandidateID)
 			if err != nil {
 				return nil, protocol.VoteResponse{Term: p.raft.GetCurrentTerm(), VoteGranted: false}, err
