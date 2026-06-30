@@ -20,17 +20,22 @@ type PreCandidate struct {
 	transition chan raft.State
 }
 
+func (p *PreCandidate) Start() error {
+	return nil
+}
+
 func (p *PreCandidate) Run() {
 	responses := make(chan protocol.PreVoteResponse, len(p.others))
-	p.sendPreVotes(responses)
-	p.HandlePreVoteResponses(responses, p.transition)
+	defer close(responses)
+	p.sendPreVoteRequests(responses)
+	p.handlePreVoteResponses(responses, p.transition)
 }
 
 func (p *PreCandidate) GetTransition() chan raft.State {
 	return p.transition
 }
 
-func (p *PreCandidate) sendPreVotes(responses chan protocol.PreVoteResponse) {
+func (p *PreCandidate) sendPreVoteRequests(responses chan protocol.PreVoteResponse) {
 	var wg sync.WaitGroup
 	for _, other := range p.others {
 		request := protocol.PreVoteRequest{
@@ -60,7 +65,7 @@ func (p *PreCandidate) sendPreVotes(responses chan protocol.PreVoteResponse) {
 	}()
 }
 
-func (p *PreCandidate) HandlePreVoteResponses(responses chan protocol.PreVoteResponse, transitionSignal chan raft.State) {
+func (p *PreCandidate) handlePreVoteResponses(responses chan protocol.PreVoteResponse, transitionSignal chan raft.State) {
 	successCount := 0
 	for preVoteResponse := range responses {
 		if preVoteResponse.Granted {
@@ -69,13 +74,6 @@ func (p *PreCandidate) HandlePreVoteResponses(responses chan protocol.PreVoteRes
 				candidateState := &Candidate{
 					raft:       p.raft,
 					transition: make(chan raft.State),
-				}
-
-				p.raft.ResetVotedFor()
-				err := p.raft.SetVotedFor(p.raft.GetServerID())
-				if err != nil {
-					p.raft.Logger.Error("failed to update voted for", zap.Error(err))
-					continue
 				}
 				transitionSignal <- candidateState
 				break
