@@ -18,6 +18,11 @@ type Master struct {
 	transition chan raft.State
 }
 
+func (m *Master) Start() error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (m *Master) Run() {
 	//TODO implement me
 	panic("implement me")

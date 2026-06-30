@@ -19,8 +19,12 @@ type Follower struct {
 	transition chan raft.State
 }
 
-func (f *Follower) Run() {
+func (f *Follower) Start() error {
 	f.isRunning = true
+	return nil
+}
+
+func (f *Follower) Run() {
 	go f.monitorHeartBeat()
 }
 
