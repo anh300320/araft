@@ -2,10 +2,15 @@ package raft
 
 import (
 	"errors"
+	"fmt"
+	"math/rand"
+	"reflect"
+	"time"
 
 	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/persistent"
 	"github.com/anh300320/araft/internal/raft/protocol"
+	"github.com/anh300320/araft/internal/raft/settings"
 	"github.com/anh300320/araft/internal/raft/transport"
 	"go.uber.org/zap"
 )
@@ -21,19 +26,60 @@ type Raft struct {
 	lastApplied common.LogIndex
 
 	state  State
-	Logger zap.Logger
+	Logger *zap.Logger
 
 	transport transport.Transport
-	others    []transport.Transport
-
+	peers     []Peer
 	// Volatile states for leaders
 	//nextIndex  []LogIndex
 	//matchIndex []LogIndex
-	//
-	//followers []Raft
-	//transport Transport
 
 	persistent persistent.Persistent
+
+	baseElectionTimoutMs int
+}
+
+func NewRaftNode(logger *zap.Logger, config settings.Config) *Raft {
+	nodeTransport := transport.NewHttpTransport(logger, config.Hostname, config.Port)
+	nodePersistent := persistent.NewSimpleFilePersistent(logger, config.GetDataPath())
+	return &Raft{
+		serverID:    common.ServerID(config.NodeID),
+		currentTerm: 0,
+		votedFor:    0,
+		logs:        []common.LogEntry{},
+		commitIndex: 0,
+		lastApplied: 0,
+		state:       nil,
+		Logger: logger.With(
+			zap.Int("node_id", config.NodeID),
+		),
+		transport:            nodeTransport,
+		peers:                buildPeers(logger, config),
+		persistent:           nodePersistent,
+		baseElectionTimoutMs: config.ElectionTimeoutBaseMs,
+	}
+}
+
+func (r *Raft) RandomElectionTimeout() time.Duration {
+	return time.Duration(r.baseElectionTimoutMs+rand.Intn(150)) * time.Millisecond
+}
+
+func buildPeers(logger *zap.Logger, config settings.Config) []Peer {
+	peers := make([]Peer, 0, len(config.Peers))
+	for _, peerConfig := range config.Peers {
+		if peerConfig.ServerID == config.NodeID {
+			continue
+		}
+		peers = append(peers, Peer{
+			ServerID: common.ServerID(peerConfig.ServerID),
+			transport: transport.NewHttpTransport(
+				logger, // TODO: use a different logger here
+				peerConfig.Hostname,
+				peerConfig.Port,
+			),
+		})
+	}
+	return peers
 }
 
 func (r *Raft) Run() {
@@ -48,7 +94,7 @@ func (r *Raft) Run() {
 		go r.state.Run()
 		select {
 		case nextState := <-r.state.GetTransition():
-			r.changeState(nextState)
+			r.ChangeState(nextState)
 		case event, ok := <-eventChan:
 			if ok == false {
 				panic("the event channel has been closed unexpectedly")
@@ -58,7 +104,6 @@ func (r *Raft) Run() {
 				r.Logger.Error("failed to handle event", zap.Error(err))
 			}
 		}
-
 	}
 }
 
@@ -71,7 +116,11 @@ func (r *Raft) GetCurrentTerm() common.Term {
 }
 
 func (r *Raft) GetOthers() []transport.Transport {
-	return r.others
+	peerTransports := make([]transport.Transport, len(r.peers))
+	for i, p := range r.peers {
+		peerTransports[i] = p.transport
+	}
+	return peerTransports
 }
 
 func (r *Raft) GetCommitIndex() common.LogIndex {
@@ -96,14 +145,6 @@ func (r *Raft) GetLatestLogEntry() common.LogEntry {
 	return r.logs[len(r.logs)-1]
 }
 
-func (r *Raft) setTerm(newTerm common.Term) error {
-	if newTerm <= r.currentTerm {
-		return errors.New("failed to assign new term, the new term should be greater than the current term")
-	}
-	r.currentTerm = newTerm
-	return nil
-}
-
 func (r *Raft) UpgradeTerm(term common.Term) error {
 	err := r.setTerm(term)
 	if err != nil {
@@ -118,8 +159,8 @@ func (r *Raft) UpgradeTerm(term common.Term) error {
 }
 
 func (r *Raft) SetVotedFor(candidateID common.ServerID) error {
-	if r.IsAbleToVoteFor(candidateID) {
-		return errors.New("failed to assign vote, already voted")
+	if !r.IsAbleToVoteFor(candidateID) {
+		return fmt.Errorf("failed to assign vote, already voted for %d", r.votedFor)
 	}
 	r.votedFor = candidateID
 	return r.flushState()
@@ -134,7 +175,9 @@ func (r *Raft) ResetVotedFor() error {
 	return r.flushState()
 }
 
-func (r *Raft) changeState(nextState State) {
+func (r *Raft) ChangeState(nextState State) {
+	t := reflect.TypeOf(nextState).Elem()
+	r.Logger.Info("Changine states to", zap.String("next_state:", t.Name()))
 	oldState := r.state
 	r.state = nextState
 
@@ -144,10 +187,21 @@ func (r *Raft) changeState(nextState State) {
 		panic(err)
 	}
 
+	if oldState == nil {
+		return
+	}
 	err = oldState.Close()
 	if err != nil {
 		r.Logger.Error("failed to close the old state", zap.Error(err))
 	}
+}
+
+func (r *Raft) setTerm(newTerm common.Term) error {
+	if newTerm <= r.currentTerm {
+		return errors.New("failed to assign new term, the new term should be greater than the current term")
+	}
+	r.currentTerm = newTerm
+	return nil
 }
 
 func (r *Raft) flushState() error {
@@ -164,7 +218,7 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 		appendEntriesRequest := msg.Body.(protocol.AppendEntriesRequest)
 		nextState, resp, err := r.state.HandleHeartBeat(appendEntriesRequest)
 		for nextState != nil {
-			r.changeState(nextState)
+			r.ChangeState(nextState)
 			nextState, resp, err = r.state.HandleHeartBeat(appendEntriesRequest)
 		}
 		if err != nil {
@@ -177,7 +231,7 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 		appendEntriesRequest := msg.Body.(protocol.AppendEntriesRequest)
 		nextState, resp, err := r.state.HandleAppendEntries(appendEntriesRequest)
 		for nextState != nil {
-			r.changeState(nextState)
+			r.ChangeState(nextState)
 			nextState, resp, err = r.state.HandleAppendEntries(appendEntriesRequest)
 		}
 		if err != nil {
@@ -190,7 +244,7 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 		prevVoteRequest := msg.Body.(protocol.PreVoteRequest)
 		nextState, resp, err := r.state.HandlePreVote(prevVoteRequest)
 		for nextState != nil {
-			r.changeState(nextState)
+			r.ChangeState(nextState)
 			nextState, resp, err = r.state.HandlePreVote(prevVoteRequest)
 		}
 		if err != nil {
@@ -203,7 +257,7 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 		voteRequest := msg.Body.(protocol.VoteRequest)
 		nextState, resp, err := r.state.HandleVote(voteRequest)
 		for nextState != nil {
-			r.changeState(nextState)
+			r.ChangeState(nextState)
 			nextState, resp, err = r.state.HandleVote(voteRequest)
 		}
 		if err != nil {
@@ -213,4 +267,11 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 		msg.ResponseChan <- resp
 	}
 	return nil
+}
+
+type Peer struct {
+	ServerID   common.ServerID
+	nextIndex  int
+	matchIndex int
+	transport  transport.Transport
 }

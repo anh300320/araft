@@ -2,12 +2,10 @@ package states
 
 import (
 	"sync"
-	"time"
 
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/protocol"
-	"github.com/anh300320/araft/internal/raft/transport"
 	"go.uber.org/zap"
 )
 
@@ -16,7 +14,6 @@ type PreCandidate struct {
 	LastLogIndex common.LogIndex
 	LastLogTerm  common.Term
 
-	others     []transport.Transport
 	transition chan raft.State
 }
 
@@ -25,8 +22,7 @@ func (p *PreCandidate) Start() error {
 }
 
 func (p *PreCandidate) Run() {
-	responses := make(chan protocol.PreVoteResponse, len(p.others))
-	defer close(responses)
+	responses := make(chan protocol.PreVoteResponse, len(p.raft.GetOthers()))
 	p.sendPreVoteRequests(responses)
 	p.handlePreVoteResponses(responses, p.transition)
 }
@@ -37,7 +33,7 @@ func (p *PreCandidate) GetTransition() chan raft.State {
 
 func (p *PreCandidate) sendPreVoteRequests(responses chan protocol.PreVoteResponse) {
 	var wg sync.WaitGroup
-	for _, other := range p.others {
+	for _, other := range p.raft.GetOthers() {
 		request := protocol.PreVoteRequest{
 			HypotheticalTerm: p.getHypotheticalTerm(),
 			LastLogIndex:     p.LastLogIndex,
@@ -70,7 +66,7 @@ func (p *PreCandidate) handlePreVoteResponses(responses chan protocol.PreVoteRes
 	for preVoteResponse := range responses {
 		if preVoteResponse.Granted {
 			successCount += 1
-			if successCount >= common.GetMajorityCount(len(p.others)) {
+			if successCount >= common.GetMajorityCount(len(p.raft.GetOthers())) {
 				candidateState := &Candidate{
 					raft:       p.raft,
 					transition: make(chan raft.State),
@@ -102,11 +98,9 @@ func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (raft.State, pro
 	if request.Term > p.raft.GetCurrentTerm() {
 		nextState := &Follower{
 			raft:            p.raft,
-			lastHeartBeatAt: time.Now(),
-			monitorInterval: 0,
-			electionTimeout: 0,
 			isRunning:       false,
 			transition:      make(chan raft.State),
+			timerResetEvent: make(chan struct{}),
 		}
 		err := p.raft.UpgradeTerm(request.Term)
 		if err != nil {

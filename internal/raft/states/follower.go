@@ -5,18 +5,30 @@ import (
 
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/protocol"
+	"github.com/anh300320/araft/internal/raft/settings"
 	"go.uber.org/zap"
 )
 
 type Follower struct {
 	raft *raft.Raft
 
-	lastHeartBeatAt time.Time
-	monitorInterval time.Duration
-	electionTimeout time.Duration
-	isRunning       bool
+	timer     *time.Timer
+	isRunning bool
 
-	transition chan raft.State
+	transition      chan raft.State
+	timerResetEvent chan struct{}
+}
+
+func NewFollower(r *raft.Raft, config settings.Config) *raft.Raft {
+	followerState := &Follower{
+		raft:            r,
+		timer:           nil,
+		isRunning:       false,
+		transition:      make(chan raft.State),
+		timerResetEvent: make(chan struct{}),
+	}
+	r.ChangeState(followerState)
+	return r
 }
 
 func (f *Follower) Start() error {
@@ -25,6 +37,7 @@ func (f *Follower) Start() error {
 }
 
 func (f *Follower) Run() {
+	f.raft.Logger.Info("Running...")
 	go f.monitorHeartBeat()
 }
 
@@ -33,23 +46,31 @@ func (f *Follower) GetTransition() chan raft.State {
 }
 
 func (f *Follower) monitorHeartBeat() {
+	f.timer = time.NewTimer(f.raft.RandomElectionTimeout())
+	f.resetElectionTimer()
 	for f.isRunning {
-		if time.Now().Sub(f.lastHeartBeatAt) > f.electionTimeout {
-			prevCandidateState := &PreCandidate{
-				LastLogIndex: 0,
-				LastLogTerm:  0,
-				others:       f.raft.GetOthers(),
-				transition:   make(chan raft.State),
-			}
-			f.transition <- prevCandidateState
-			defer close(f.transition)
+		select {
+		case <-f.timer.C:
+			f.startElection()
+			return
+		case <-f.timerResetEvent:
+			f.resetElectionTimer()
 		}
-		time.Sleep(f.monitorInterval)
 	}
 }
 
+func (f *Follower) startElection() {
+	nextState := &PreCandidate{
+		raft:         &raft.Raft{},
+		LastLogIndex: 0,
+		LastLogTerm:  0,
+		transition:   make(chan raft.State),
+	}
+	f.transition <- nextState
+}
+
 func (f *Follower) HandleHeartBeat(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
-	f.lastHeartBeatAt = time.Now()
+	f.timerResetEvent <- struct{}{}
 	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
 }
 
@@ -117,20 +138,22 @@ func (f *Follower) HandlePreVote(request protocol.PreVoteRequest) (raft.State, p
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
 		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
 
-	isTimeOut := time.Now().Sub(f.lastHeartBeatAt) > f.electionTimeout
-
 	return nil, protocol.PreVoteResponse{
 		Term:    f.raft.GetCurrentTerm(),
-		Granted: isNewTerm && isLogUpToDate && isTimeOut,
+		Granted: isNewTerm && isLogUpToDate,
 	}, nil
 }
 
 func (f *Follower) resetElectionTimer() {
-	f.lastHeartBeatAt = time.Now()
+	timeout := f.raft.RandomElectionTimeout()
+	f.raft.Logger.Info("Resetting election timer", zap.Int("timeout_ms", int(timeout.Milliseconds())))
+	f.timer.Reset(timeout)
 }
 
 func (f *Follower) Close() error {
 	close(f.transition)
 	f.isRunning = false
+	close(f.timerResetEvent)
+	f.timer.Stop()
 	return nil
 }
