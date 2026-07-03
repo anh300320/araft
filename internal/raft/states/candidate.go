@@ -13,6 +13,10 @@ type Candidate struct {
 	transition chan raft.State
 }
 
+func (c *Candidate) Start() error {
+	return c.raft.SetVotedFor(c.raft.GetServerID())
+}
+
 func (c *Candidate) Run() {
 	return
 }

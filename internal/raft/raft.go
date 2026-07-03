@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/anh300320/araft/internal/raft/common"
+	"github.com/anh300320/araft/internal/raft/persistent"
 	"github.com/anh300320/araft/internal/raft/protocol"
 	"github.com/anh300320/araft/internal/raft/transport"
 	"go.uber.org/zap"
@@ -31,6 +32,8 @@ type Raft struct {
 	//
 	//followers []Raft
 	//transport Transport
+
+	persistent persistent.Persistent
 }
 
 func (r *Raft) Run() {
@@ -93,7 +96,7 @@ func (r *Raft) GetLatestLogEntry() common.LogEntry {
 	return r.logs[len(r.logs)-1]
 }
 
-func (r *Raft) SetTerm(newTerm common.Term) error {
+func (r *Raft) setTerm(newTerm common.Term) error {
 	if newTerm <= r.currentTerm {
 		return errors.New("failed to assign new term, the new term should be greater than the current term")
 	}
@@ -102,12 +105,16 @@ func (r *Raft) SetTerm(newTerm common.Term) error {
 }
 
 func (r *Raft) UpgradeTerm(term common.Term) error {
-	err := r.SetTerm(term) // TODO implement atomicity for these function
+	err := r.setTerm(term)
 	if err != nil {
 		return err
 	}
-	r.ResetVotedFor()
-	return nil
+	err = r.ResetVotedFor()
+	if err != nil {
+		return err
+	}
+	err = r.flushState()
+	return err
 }
 
 func (r *Raft) SetVotedFor(candidateID common.ServerID) error {
@@ -115,28 +122,40 @@ func (r *Raft) SetVotedFor(candidateID common.ServerID) error {
 		return errors.New("failed to assign vote, already voted")
 	}
 	r.votedFor = candidateID
-	return nil
+	return r.flushState()
 }
 
 func (r *Raft) IsAbleToVoteFor(candidateID common.ServerID) bool {
 	return r.votedFor == 0 || r.votedFor == candidateID
 }
 
-func (r *Raft) ResetVotedFor() {
+func (r *Raft) ResetVotedFor() error {
 	r.votedFor = 0
-}
-
-func (r *Raft) GetVotedFor() common.ServerID {
-	return r.votedFor
+	return r.flushState()
 }
 
 func (r *Raft) changeState(nextState State) {
 	oldState := r.state
 	r.state = nextState
-	err := oldState.Close()
+
+	err := r.state.Start()
+	if err != nil {
+		r.Logger.Error("failed to start state", zap.Error(err))
+		panic(err)
+	}
+
+	err = oldState.Close()
 	if err != nil {
 		r.Logger.Error("failed to close the old state", zap.Error(err))
 	}
+}
+
+func (r *Raft) flushState() error {
+	persistentState := persistent.NodeState{
+		Term:     r.currentTerm,
+		VotedFor: r.votedFor,
+	}
+	return r.persistent.UpdateState(persistentState)
 }
 
 func (r *Raft) handleMessage(msg protocol.EventMessage) error {
