@@ -18,10 +18,6 @@ func (c *Candidate) Start() error {
 func (c *Candidate) Run() {
 }
 
-func (c *Candidate) HandleHeartBeat(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
-	return nil, protocol.AppendEntriesResponse{IsSucceeded: false}, nil
-}
-
 func (c *Candidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
 	return nil, protocol.AppendEntriesResponse{IsSucceeded: false}, nil
 }

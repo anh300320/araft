@@ -38,8 +38,33 @@ func NewHttpTransportWithAddress(logger *zap.Logger, hostname string, port int) 
 }
 
 func (t *HttpTransport) AppendEntries(other Transport, request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
-	//TODO implement me
-	panic("implement me")
+	body, err := json.Marshal(request)
+	if err != nil {
+		msg := fmt.Sprintf("failed to marshal append entries message: %s", err.Error())
+		t.logger.Error(msg)
+		return protocol.AppendEntriesResponse{IsSucceeded: false}, ErrSerializeMessage
+	}
+
+	t.logger.Info(
+		"sending append entries",
+		zap.String("address", other.GetAddress()),
+	)
+	var appendEntriesResponse protocol.AppendEntriesResponse
+	resp, err := t.client.Post(
+		other.GetAddress(),
+		"application/json",
+		bytes.NewBuffer(body),
+	)
+	if err != nil {
+		t.logger.Error("failed to send append entries request", zap.Error(err))
+		return appendEntriesResponse, err
+	}
+	defer resp.Body.Close()
+	err = json.NewDecoder(resp.Body).Decode(&appendEntriesResponse)
+	if err != nil {
+		return appendEntriesResponse, fmt.Errorf("failed to send append entries %w", err)
+	}
+	return appendEntriesResponse, nil
 }
 
 func (t *HttpTransport) SendVote(other Transport, request protocol.VoteRequest) (protocol.VoteResponse, error) {
@@ -75,10 +100,6 @@ func handleHttpRequest[TReq any, TRes any](t *HttpTransport, event protocol.Even
 	}
 }
 
-func (t *HttpTransport) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	handleHttpRequest[protocol.AppendEntriesRequest, protocol.AppendEntriesResponse](t, protocol.EventHeartBeat, w, r)
-}
-
 func (t *HttpTransport) handleAppendEntries(w http.ResponseWriter, r *http.Request) {
 	handleHttpRequest[protocol.AppendEntriesRequest, protocol.AppendEntriesResponse](t, protocol.EventAppendEntries, w, r)
 }
@@ -94,7 +115,6 @@ func (t *HttpTransport) handlePreVote(w http.ResponseWriter, r *http.Request) {
 func (t *HttpTransport) StartListening() (chan protocol.EventMessage, error) {
 	t.events = make(chan protocol.EventMessage)
 
-	http.HandleFunc("/heartbeats", t.handleHeartbeat)
 	http.HandleFunc("/prevotes", t.handlePreVote)
 	http.HandleFunc("/entries", t.handleAppendEntries)
 	http.HandleFunc("/votes", t.handleVote)
@@ -114,53 +134,31 @@ func (t *HttpTransport) StartListening() (chan protocol.EventMessage, error) {
 	return t.events, nil
 }
 
-func (t *HttpTransport) SendHeartBeat(other Transport, request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
-	body, err := json.Marshal(request)
-	if err != nil {
-		msg := fmt.Sprintf("failed to marshal heartbeat message: %s", err.Error())
-		t.logger.Error(msg)
-		return protocol.AppendEntriesResponse{IsSucceeded: false}, SerializeMessageError
-	}
-
-	t.logger.Info(
-		"sending heartbeat",
-		zap.String("address", other.GetAddress()),
-	)
-	resp, err := t.client.Post(
-		other.GetAddress(),
-		"application/json",
-		bytes.NewBuffer(body),
-	)
-	defer resp.Body.Close()
-	var appendEntriesResponse protocol.AppendEntriesResponse
-	err = json.NewDecoder(resp.Body).Decode(&appendEntriesResponse)
-	if err != nil {
-		return appendEntriesResponse, HeartBeatMessageError
-	}
-	return appendEntriesResponse, nil
-}
-
 func (t *HttpTransport) SendPreVote(other Transport, request protocol.PreVoteRequest) (protocol.PreVoteResponse, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
 		msg := fmt.Sprintf("failed to marshal pre-vote message: %s", err.Error())
 		t.logger.Error(msg)
-		return protocol.PreVoteResponse{}, SerializeMessageError
+		return protocol.PreVoteResponse{}, ErrSerializeMessage
 	}
 	t.logger.Info(
 		"sending pre-votes",
 		zap.String("address", other.GetAddress()),
 	)
+	var preVoteResponse protocol.PreVoteResponse
 	resp, err := t.client.Post(
 		other.GetAddress(),
 		"application/json",
 		bytes.NewBuffer(body),
 	)
+	if err != nil {
+		t.logger.Error("failed to send pre vote request", zap.Error(err))
+		return preVoteResponse, err
+	}
 	defer resp.Body.Close()
-	var preVoteResponse protocol.PreVoteResponse
 	err = json.NewDecoder(resp.Body).Decode(&preVoteResponse)
 	if err != nil {
-		return preVoteResponse, HeartBeatMessageError
+		return preVoteResponse, fmt.Errorf("failed to send pre vote request %w", err)
 	}
 	return preVoteResponse, nil
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/anh300320/araft/internal/raft/common"
 	"go.uber.org/zap"
 )
 
@@ -49,7 +50,18 @@ func (s *SimpleFilePersistent) UpdateState(state NodeState) error {
 	return err
 }
 
-func (s *SimpleFilePersistent) GetState(state NodeState) (*NodeState, error) {
+func (s *SimpleFilePersistent) GetState() (*NodeState, error) {
+	fileExists, err := common.FileExists(s.Path)
+	if err != nil {
+		return nil, err
+	}
+	if !fileExists {
+		return &NodeState{
+			Term:     0,
+			VotedFor: 0,
+		}, nil
+	}
+
 	data, err := os.ReadFile(s.Path)
 	if err != nil {
 		s.logger.Error("failed to read file", zap.Error(err), zap.String("path", s.Path))

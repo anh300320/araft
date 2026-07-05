@@ -42,10 +42,19 @@ type Raft struct {
 func NewRaftNode(logger *zap.Logger, config settings.Config) *Raft {
 	nodeTransport := transport.NewHttpTransport(logger, config.Hostname, config.Port)
 	nodePersistent := persistent.NewSimpleFilePersistent(logger, config.GetDataPath())
+	nodeState, err := nodePersistent.GetState()
+	if err != nil {
+		logger.Error(
+			"failed to load node state",
+			zap.Int("node_id", config.NodeID),
+			zap.Error(err),
+		)
+		panic(err)
+	}
 	return &Raft{
 		serverID:    common.ServerID(config.NodeID),
-		currentTerm: 0,
-		votedFor:    0,
+		currentTerm: nodeState.Term,
+		votedFor:    nodeState.VotedFor,
 		logs:        []common.LogEntry{},
 		commitIndex: 0,
 		lastApplied: 0,
@@ -96,7 +105,7 @@ func (r *Raft) Run() {
 		case nextState := <-r.state.GetTransition():
 			r.ChangeState(nextState)
 		case event, ok := <-eventChan:
-			if ok == false {
+			if !ok {
 				panic("the event channel has been closed unexpectedly")
 			}
 			err := r.handleMessage(event)
@@ -214,19 +223,6 @@ func (r *Raft) flushState() error {
 
 func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 	switch msg.Event {
-	case protocol.EventHeartBeat:
-		appendEntriesRequest := msg.Body.(protocol.AppendEntriesRequest)
-		nextState, resp, err := r.state.HandleHeartBeat(appendEntriesRequest)
-		for nextState != nil {
-			r.ChangeState(nextState)
-			nextState, resp, err = r.state.HandleHeartBeat(appendEntriesRequest)
-		}
-		if err != nil {
-			r.Logger.Error("failed to handle heartbeat message")
-			return err
-		}
-		msg.ResponseChan <- resp
-
 	case protocol.EventAppendEntries:
 		appendEntriesRequest := msg.Body.(protocol.AppendEntriesRequest)
 		nextState, resp, err := r.state.HandleAppendEntries(appendEntriesRequest)

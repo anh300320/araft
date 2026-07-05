@@ -1,8 +1,6 @@
 package protocol
 
-import (
-	"github.com/anh300320/araft/internal/raft/common"
-)
+import "github.com/anh300320/araft/internal/raft/common"
 
 type VoteRequest struct {
 	CandidateID  common.ServerID
@@ -17,6 +15,7 @@ type VoteResponse struct {
 }
 
 type AppendEntriesRequest struct {
+	Term              common.Term
 	MasterID          common.ServerID
 	PrevLogIndex      common.LogIndex
 	PrevLogTerm       common.Term
@@ -25,6 +24,7 @@ type AppendEntriesRequest struct {
 }
 
 type AppendEntriesResponse struct {
+	Term        common.Term
 	IsSucceeded bool
 }
 
@@ -44,8 +44,7 @@ type PreVoteResponse struct {
 type Event int
 
 const (
-	EventHeartBeat Event = iota
-	EventAppendEntries
+	EventAppendEntries Event = iota
 	EventPreVote
 	EventVote
 )

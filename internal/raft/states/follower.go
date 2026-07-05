@@ -69,12 +69,15 @@ func (f *Follower) startElection() {
 	f.transition <- nextState
 }
 
-func (f *Follower) HandleHeartBeat(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
-	f.timerResetEvent <- struct{}{}
-	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
-}
-
 func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
+	f.timerResetEvent <- struct{}{}
+	if request.Term > f.raft.GetCurrentTerm() {
+		err := f.raft.UpgradeTerm(request.Term)
+		if err != nil {
+			return nil, protocol.AppendEntriesResponse{}, err
+		}
+	}
+
 	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
 }
 

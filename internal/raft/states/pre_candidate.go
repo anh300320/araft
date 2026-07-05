@@ -78,10 +78,6 @@ func (p *PreCandidate) handlePreVoteResponses(responses chan protocol.PreVoteRes
 	}
 }
 
-func (p *PreCandidate) HandleHeartBeat(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
-	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
-}
-
 func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
 	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
 }

@@ -1,9 +1,12 @@
 package states
 
 import (
+	"time"
+
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/protocol"
+	"go.uber.org/zap"
 )
 
 type Master struct {
@@ -22,22 +25,32 @@ func (m *Master) Start() error {
 }
 
 func (m *Master) Run() {
-	//TODO implement me
-	panic("implement me")
+	go m.maintainHeartBeat()
 }
 
 func (m *Master) GetTransition() chan raft.State {
 	return m.transition
 }
 
-func (m *Master) HandleHeartBeat(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (m *Master) HandleAppendEntries(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
-	//TODO implement me
-	panic("implement me")
+	if request.Term > m.raft.GetCurrentTerm() {
+		nextState := &Follower{
+			raft:            m.raft,
+			isRunning:       false,
+			transition:      make(chan raft.State),
+			timerResetEvent: make(chan struct{}),
+		}
+		return nextState, protocol.AppendEntriesResponse{}, nil
+	}
+
+	if request.Term == m.raft.GetCurrentTerm() {
+		m.raft.Logger.Warn("detected another leader with the same term", zap.Int64("peer_node_id", int64(int(request.MasterID))))
+	}
+
+	return nil, protocol.AppendEntriesResponse{
+		Term:        m.raft.GetCurrentTerm(),
+		IsSucceeded: false,
+	}, nil
 }
 
 func (m *Master) HandleVote(request protocol.VoteRequest) (raft.State, protocol.VoteResponse, error) {
@@ -69,6 +82,20 @@ func (m *Master) HandlePreVote(request protocol.PreVoteRequest) (raft.State, pro
 		Term:    m.raft.GetCurrentTerm(),
 		Granted: isGreaterTerm && isLogUpToDate,
 	}, nil
+}
+
+func (m *Master) maintainHeartBeat() {
+	for {
+		err := m.broadcastHeartBeat()
+		if err != nil {
+			m.raft.Logger.Error("failed to broadcast heartbeats", zap.Error(err))
+		}
+		time.Sleep(100)
+	}
+}
+
+func (m *Master) broadcastHeartBeat() error {
+	return nil
 }
 
 func (m *Master) Close() error {
