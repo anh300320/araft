@@ -2,6 +2,7 @@ package states
 
 import (
 	"sync"
+	"time"
 
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/common"
@@ -24,7 +25,21 @@ func (p *PreCandidate) Start() error {
 func (p *PreCandidate) Run() {
 	responses := make(chan protocol.PreVoteResponse, len(p.raft.GetOthers()))
 	p.sendPreVoteRequests(responses)
-	p.handlePreVoteResponses(responses, p.transition)
+	var nextState raft.State
+	if p.promoteToCandidate(responses) {
+		nextState = &Candidate{
+			raft:       p.raft,
+			transition: make(chan raft.State),
+		}
+	} else {
+		nextState = &Follower{
+			raft:            p.raft,
+			isRunning:       false,
+			transition:      make(chan raft.State),
+			timerResetEvent: make(chan struct{}),
+		}
+	}
+	p.transition <- nextState
 }
 
 func (p *PreCandidate) GetTransition() chan raft.State {
@@ -61,19 +76,25 @@ func (p *PreCandidate) sendPreVoteRequests(responses chan protocol.PreVoteRespon
 	}()
 }
 
-func (p *PreCandidate) handlePreVoteResponses(responses chan protocol.PreVoteResponse, transitionSignal chan raft.State) {
+func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteResponse) bool {
 	successCount := 0
-	for preVoteResponse := range responses {
-		if preVoteResponse.Granted {
-			successCount += 1
-			if successCount >= common.GetMajorityCount(len(p.raft.GetOthers())) {
-				candidateState := &Candidate{
-					raft:       p.raft,
-					transition: make(chan raft.State),
-				}
-				transitionSignal <- candidateState
-				break
+	receivedCount := 0
+	electionTimer := time.NewTimer(p.raft.RandomElectionTimeout())
+	for {
+		select {
+		case resp := <-responses:
+			receivedCount += 1
+			if receivedCount > len(responses) {
+				return false
 			}
+			if resp.Granted {
+				successCount += 1
+				if successCount >= common.GetMajorityCount(len(responses)) {
+					return true
+				}
+			}
+		case <-electionTimer.C:
+			return false
 		}
 	}
 }

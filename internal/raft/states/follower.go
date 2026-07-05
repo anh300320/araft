@@ -61,7 +61,7 @@ func (f *Follower) monitorHeartBeat() {
 
 func (f *Follower) startElection() {
 	nextState := &PreCandidate{
-		raft:         &raft.Raft{},
+		raft:         f.raft,
 		LastLogIndex: 0,
 		LastLogTerm:  0,
 		transition:   make(chan raft.State),
