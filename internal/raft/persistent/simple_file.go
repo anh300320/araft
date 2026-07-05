@@ -10,14 +10,25 @@ import (
 
 type SimpleFilePersistent struct {
 	Path   string
-	logger zap.Logger
+	logger *zap.Logger
+}
+
+func NewSimpleFilePersistent(logger *zap.Logger, dataPath string) *SimpleFilePersistent {
+	return &SimpleFilePersistent{
+		Path:   dataPath,
+		logger: logger,
+	}
 }
 
 func (s *SimpleFilePersistent) UpdateState(state NodeState) error {
 	tempFileName := filepath.Base(s.Path) + ".*"
+	err := os.MkdirAll(filepath.Dir(s.Path), 0755)
+	if err != nil {
+		s.logger.Error("failed to create directory", zap.String("dir", filepath.Dir(s.Path)), zap.Error(err))
+	}
 	tempFile, err := os.CreateTemp(filepath.Dir(s.Path), tempFileName)
 	if err != nil {
-		s.logger.Error("failed to create temp file", zap.String("filename", tempFileName))
+		s.logger.Error("failed to create temp file", zap.String("filename", tempFileName), zap.Error(err))
 		return err
 	}
 	defer tempFile.Close()

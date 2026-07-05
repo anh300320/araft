@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/anh300320/araft/internal/raft/protocol"
 	"go.uber.org/zap"
@@ -13,10 +14,27 @@ import (
 
 type HttpTransport struct {
 	client   http.Client
-	logger   zap.Logger
+	logger   *zap.Logger
 	hostName string
 	port     int16
 	events   chan protocol.EventMessage
+}
+
+func NewHttpTransport(logger *zap.Logger, hostname string, port int) *HttpTransport {
+	return NewHttpTransportWithAddress(logger, hostname, port)
+}
+
+func NewHttpTransportWithAddress(logger *zap.Logger, hostname string, port int) *HttpTransport {
+	httpClient := http.Client{
+		Timeout: 30 * time.Second,
+	}
+	return &HttpTransport{
+		client:   httpClient,
+		logger:   logger,
+		hostName: hostname,
+		port:     int16(port),
+		events:   make(chan protocol.EventMessage),
+	}
 }
 
 func (t *HttpTransport) AppendEntries(other Transport, request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
@@ -75,7 +93,6 @@ func (t *HttpTransport) handlePreVote(w http.ResponseWriter, r *http.Request) {
 
 func (t *HttpTransport) StartListening() (chan protocol.EventMessage, error) {
 	t.events = make(chan protocol.EventMessage)
-	defer close(t.events)
 
 	http.HandleFunc("/heartbeats", t.handleHeartbeat)
 	http.HandleFunc("/prevotes", t.handlePreVote)

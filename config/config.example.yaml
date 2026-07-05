@@ -1,0 +1,13 @@
+node_id: 1
+hostname: "127.0.0.1"
+port: 8081
+election_timeout_base_ms: 300
+data_path_template: "./data/node-%d/state.json"
+
+peers:
+  - server_id: 2
+    hostname: "127.0.0.1"
+    port: 8082
+  - server_id: 3
+    hostname: "127.0.0.1"
+    port: 8083

@@ -1,8 +1,6 @@
 package states
 
 import (
-	"time"
-
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/protocol"
@@ -53,11 +51,9 @@ func (m *Master) HandleVote(request protocol.VoteRequest) (raft.State, protocol.
 	// Reaching here means the Candidate's term is greater than self term.
 	nextState := &Follower{
 		raft:            m.raft,
-		lastHeartBeatAt: time.Now(),
-		monitorInterval: 0,
-		electionTimeout: 0,
 		isRunning:       false,
 		transition:      make(chan raft.State),
+		timerResetEvent: make(chan struct{}),
 	}
 	return nextState, protocol.VoteResponse{}, nil
 }

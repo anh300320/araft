@@ -1,8 +1,6 @@
 package states
 
 import (
-	"time"
-
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/protocol"
 	"go.uber.org/zap"
@@ -18,7 +16,6 @@ func (c *Candidate) Start() error {
 }
 
 func (c *Candidate) Run() {
-	return
 }
 
 func (c *Candidate) HandleHeartBeat(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
@@ -47,11 +44,9 @@ func (c *Candidate) HandleVote(request protocol.VoteRequest) (raft.State, protoc
 	if request.Term > c.raft.GetCurrentTerm() {
 		nextState := &Follower{
 			raft:            c.raft,
-			lastHeartBeatAt: time.Now(),
-			monitorInterval: 0,
-			electionTimeout: 0,
 			isRunning:       false,
 			transition:      make(chan raft.State),
+			timerResetEvent: make(chan struct{}),
 		}
 		err := c.raft.UpgradeTerm(request.Term)
 		if err != nil {
