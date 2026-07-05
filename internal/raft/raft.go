@@ -100,7 +100,6 @@ func (r *Raft) Run() {
 	defer close(eventChan)
 
 	for {
-		go r.state.Run()
 		select {
 		case nextState := <-r.state.GetTransition():
 			r.ChangeState(nextState)
@@ -203,6 +202,7 @@ func (r *Raft) ChangeState(nextState State) {
 	if err != nil {
 		r.Logger.Error("failed to close the old state", zap.Error(err))
 	}
+	go r.state.Run()
 }
 
 func (r *Raft) setTerm(newTerm common.Term) error {
