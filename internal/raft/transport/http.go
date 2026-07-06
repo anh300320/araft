@@ -37,7 +37,7 @@ func NewHttpTransportWithAddress(logger *zap.Logger, hostname string, port int) 
 	}
 }
 
-func (t *HttpTransport) AppendEntries(other Transport, request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
+func (t *HttpTransport) SendAppendEntries(other Transport, request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
 		msg := fmt.Sprintf("failed to marshal append entries message: %s", err.Error())
