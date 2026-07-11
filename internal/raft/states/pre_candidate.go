@@ -2,6 +2,7 @@ package states
 
 import (
 	"sync"
+	"time"
 
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/common"
@@ -10,24 +11,56 @@ import (
 )
 
 type PreCandidate struct {
-	raft         *raft.Raft
+	raft *raft.Raft
+
 	LastLogIndex common.LogIndex
 	LastLogTerm  common.Term
 
-	transition chan raft.State
-}
+	isRunning bool
 
-func (p *PreCandidate) Start() error {
-	return nil
+	transition chan *raft.ChangeStateEvent
+	stopSignal chan struct{}
 }
 
 func (p *PreCandidate) Run() {
-	responses := make(chan protocol.PreVoteResponse, len(p.raft.GetOthers()))
-	p.sendPreVoteRequests(responses)
-	p.handlePreVoteResponses(responses, p.transition)
+	p.isRunning = true
+	go p.run()
 }
 
-func (p *PreCandidate) GetTransition() chan raft.State {
+func (p *PreCandidate) run() {
+	defer close(p.transition)
+	responses := make(chan protocol.PreVoteResponse, len(p.raft.GetOthers()))
+
+	p.sendPreVoteRequests(responses)
+	var nextState raft.State
+	nextTerm := p.raft.GetCurrentTerm()
+	if p.promoteToCandidate(responses) {
+		nextState = &Candidate{
+			raft:       p.raft,
+			transition: make(chan *raft.ChangeStateEvent),
+		}
+		nextTerm += 1
+	} else {
+		nextState = &Follower{
+			raft:            p.raft,
+			isRunning:       false,
+			transition:      make(chan *raft.ChangeStateEvent),
+			timerResetEvent: make(chan struct{}),
+		}
+	}
+	p.transition <- &raft.ChangeStateEvent{
+		NextState: nextState,
+		Term:      nextTerm,
+		VotedFor:  p.raft.GetServerID(),
+	}
+	<-p.stopSignal
+}
+
+func (p *PreCandidate) IsRunning() bool {
+	return p.isRunning
+}
+
+func (p *PreCandidate) GetTransition() chan *raft.ChangeStateEvent {
 	return p.transition
 }
 
@@ -61,32 +94,34 @@ func (p *PreCandidate) sendPreVoteRequests(responses chan protocol.PreVoteRespon
 	}()
 }
 
-func (p *PreCandidate) handlePreVoteResponses(responses chan protocol.PreVoteResponse, transitionSignal chan raft.State) {
+func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteResponse) bool {
 	successCount := 0
-	for preVoteResponse := range responses {
-		if preVoteResponse.Granted {
-			successCount += 1
-			if successCount >= common.GetMajorityCount(len(p.raft.GetOthers())) {
-				candidateState := &Candidate{
-					raft:       p.raft,
-					transition: make(chan raft.State),
-				}
-				transitionSignal <- candidateState
-				break
+	receivedCount := 0
+	electionTimer := time.NewTimer(p.raft.RandomElectionTimeout())
+	for {
+		select {
+		case resp := <-responses:
+			receivedCount += 1
+			if receivedCount > len(responses) {
+				return false
 			}
+			if resp.Granted {
+				successCount += 1
+				if successCount >= common.GetMajorityCount(len(responses)) {
+					return true
+				}
+			}
+		case <-electionTimer.C:
+			return false
 		}
 	}
 }
 
-func (p *PreCandidate) HandleHeartBeat(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
+func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (*raft.ChangeStateEvent, protocol.AppendEntriesResponse, error) {
 	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
 }
 
-func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
-	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
-}
-
-func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (raft.State, protocol.VoteResponse, error) {
+func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEvent, protocol.VoteResponse, error) {
 	if request.Term < p.raft.GetCurrentTerm() {
 		return nil, protocol.VoteResponse{
 			Term:        p.raft.GetCurrentTerm(),
@@ -98,16 +133,14 @@ func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (raft.State, pro
 	if request.Term > p.raft.GetCurrentTerm() {
 		nextState := &Follower{
 			raft:            p.raft,
-			isRunning:       false,
-			transition:      make(chan raft.State),
+			transition:      make(chan *raft.ChangeStateEvent),
 			timerResetEvent: make(chan struct{}),
+			stopSignal:      make(chan struct{}),
 		}
-		err := p.raft.UpgradeTerm(request.Term)
-		if err != nil {
-			p.raft.Logger.Error("failed to upgrade term", zap.Error(err))
-			return nextState, protocol.VoteResponse{}, err
-		}
-		return nextState, protocol.VoteResponse{}, nil
+		return &raft.ChangeStateEvent{
+			NextState: nextState,
+			Term:      request.Term,
+		}, protocol.VoteResponse{}, nil
 	}
 
 	latestLogEntry := p.raft.GetLatestLogEntry()
@@ -129,7 +162,7 @@ func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (raft.State, pro
 	}, nil
 }
 
-func (p *PreCandidate) HandlePreVote(request protocol.PreVoteRequest) (raft.State, protocol.PreVoteResponse, error) {
+func (p *PreCandidate) HandlePreVote(request protocol.PreVoteRequest) (*raft.ChangeStateEvent, protocol.PreVoteResponse, error) {
 	isGreaterTerm := request.HypotheticalTerm >= p.raft.GetCurrentTerm()
 
 	latestLogEntry := p.raft.GetLatestLogEntry()
@@ -146,7 +179,8 @@ func (p *PreCandidate) getHypotheticalTerm() common.Term {
 	return p.raft.GetCurrentTerm() + 1
 }
 
-func (p *PreCandidate) Close() error {
-	close(p.transition)
-	return nil
+func (p *PreCandidate) Stop() {
+	p.stopSignal <- struct{}{}
+	p.isRunning = false
+	defer close(p.stopSignal)
 }

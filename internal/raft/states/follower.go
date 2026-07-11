@@ -15,8 +15,9 @@ type Follower struct {
 	timer     *time.Timer
 	isRunning bool
 
-	transition      chan raft.State
+	transition      chan *raft.ChangeStateEvent
 	timerResetEvent chan struct{}
+	stopSignal      chan struct{}
 }
 
 func NewFollower(r *raft.Raft, config settings.Config) *raft.Raft {
@@ -24,32 +25,47 @@ func NewFollower(r *raft.Raft, config settings.Config) *raft.Raft {
 		raft:            r,
 		timer:           nil,
 		isRunning:       false,
-		transition:      make(chan raft.State),
+		transition:      make(chan *raft.ChangeStateEvent),
 		timerResetEvent: make(chan struct{}),
+		stopSignal:      make(chan struct{}),
 	}
-	r.ChangeState(followerState)
+	r.UpdateState(followerState)
 	return r
 }
 
-func (f *Follower) Start() error {
-	f.isRunning = true
-	return nil
-}
-
 func (f *Follower) Run() {
-	f.raft.Logger.Info("Running...")
-	go f.monitorHeartBeat()
+	f.isRunning = true
+	go f.run()
 }
 
-func (f *Follower) GetTransition() chan raft.State {
+func (f *Follower) run() {
+	defer close(f.timerResetEvent)
+	defer close(f.transition)
+	defer func() {
+		f.isRunning = false
+	}()
+	f.isRunning = true
+	f.raft.Logger.Info("follower running...")
+	f.monitorHeartBeat()
+	f.raft.Logger.Info("follower stopped...")
+}
+
+func (f *Follower) IsRunning() bool {
+	return f.isRunning
+}
+
+func (f *Follower) GetTransition() chan *raft.ChangeStateEvent {
 	return f.transition
 }
 
 func (f *Follower) monitorHeartBeat() {
 	f.timer = time.NewTimer(f.raft.RandomElectionTimeout())
+	defer f.timer.Stop()
 	f.resetElectionTimer()
-	for f.isRunning {
+	for {
 		select {
+		case <-f.stopSignal:
+			return
 		case <-f.timer.C:
 			f.startElection()
 			return
@@ -61,24 +77,30 @@ func (f *Follower) monitorHeartBeat() {
 
 func (f *Follower) startElection() {
 	nextState := &PreCandidate{
-		raft:         &raft.Raft{},
+		raft:         f.raft,
 		LastLogIndex: 0,
 		LastLogTerm:  0,
-		transition:   make(chan raft.State),
+		transition:   make(chan *raft.ChangeStateEvent),
 	}
-	f.transition <- nextState
+	f.transition <- &raft.ChangeStateEvent{
+		NextState: nextState,
+		Term:      f.raft.GetCurrentTerm(),
+	}
 }
 
-func (f *Follower) HandleHeartBeat(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
+func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (*raft.ChangeStateEvent, protocol.AppendEntriesResponse, error) {
 	f.timerResetEvent <- struct{}{}
+	if request.Term > f.raft.GetCurrentTerm() {
+		return &raft.ChangeStateEvent{
+			NextState: nil,
+			Term:      request.Term,
+		}, protocol.AppendEntriesResponse{}, nil
+	}
+
 	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
 }
 
-func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (raft.State, protocol.AppendEntriesResponse, error) {
-	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
-}
-
-func (f *Follower) HandleVote(request protocol.VoteRequest) (raft.State, protocol.VoteResponse, error) {
+func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEvent, protocol.VoteResponse, error) {
 	if request.Term < f.raft.GetCurrentTerm() {
 		return nil, protocol.VoteResponse{
 			Term:        f.raft.GetCurrentTerm(),
@@ -87,14 +109,9 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (raft.State, protoco
 	}
 
 	if request.Term > f.raft.GetCurrentTerm() {
-		err := f.raft.UpgradeTerm(request.Term)
-		if err != nil {
-			f.raft.Logger.Error("failed to assign new term", zap.Error(err))
-			return nil, protocol.VoteResponse{
-				Term:        f.raft.GetCurrentTerm(),
-				VoteGranted: false,
-			}, err
-		}
+		return &raft.ChangeStateEvent{
+			Term: request.Term,
+		}, protocol.VoteResponse{}, nil
 	}
 
 	if !f.raft.IsAbleToVoteFor(request.CandidateID) {
@@ -130,7 +147,7 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (raft.State, protoco
 	}, nil
 }
 
-func (f *Follower) HandlePreVote(request protocol.PreVoteRequest) (raft.State, protocol.PreVoteResponse, error) {
+func (f *Follower) HandlePreVote(request protocol.PreVoteRequest) (*raft.ChangeStateEvent, protocol.PreVoteResponse, error) {
 
 	isNewTerm := f.raft.GetCurrentTerm() < request.HypotheticalTerm
 
@@ -150,10 +167,8 @@ func (f *Follower) resetElectionTimer() {
 	f.timer.Reset(timeout)
 }
 
-func (f *Follower) Close() error {
-	close(f.transition)
+func (f *Follower) Stop() {
+	f.stopSignal <- struct{}{}
 	f.isRunning = false
-	close(f.timerResetEvent)
-	f.timer.Stop()
-	return nil
+	defer close(f.stopSignal)
 }

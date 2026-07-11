@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"errors"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -16,7 +15,8 @@ import (
 )
 
 type Raft struct {
-	serverID    common.ServerID
+	serverID common.ServerID
+
 	currentTerm common.Term
 	votedFor    common.ServerID
 	logs        []common.LogEntry
@@ -42,10 +42,19 @@ type Raft struct {
 func NewRaftNode(logger *zap.Logger, config settings.Config) *Raft {
 	nodeTransport := transport.NewHttpTransport(logger, config.Hostname, config.Port)
 	nodePersistent := persistent.NewSimpleFilePersistent(logger, config.GetDataPath())
+	nodeState, err := nodePersistent.GetState()
+	if err != nil {
+		logger.Error(
+			"failed to load node state",
+			zap.Int("node_id", config.NodeID),
+			zap.Error(err),
+		)
+		panic(err)
+	}
 	return &Raft{
 		serverID:    common.ServerID(config.NodeID),
-		currentTerm: 0,
-		votedFor:    0,
+		currentTerm: nodeState.Term,
+		votedFor:    nodeState.VotedFor,
 		logs:        []common.LogEntry{},
 		commitIndex: 0,
 		lastApplied: 0,
@@ -91,12 +100,15 @@ func (r *Raft) Run() {
 	defer close(eventChan)
 
 	for {
-		go r.state.Run()
+		if !r.state.IsRunning() {
+			r.state.Run()
+		}
+
 		select {
 		case nextState := <-r.state.GetTransition():
-			r.ChangeState(nextState)
+			r.HandleChangeState(nextState)
 		case event, ok := <-eventChan:
-			if ok == false {
+			if !ok {
 				panic("the event channel has been closed unexpectedly")
 			}
 			err := r.handleMessage(event)
@@ -145,19 +157,6 @@ func (r *Raft) GetLatestLogEntry() common.LogEntry {
 	return r.logs[len(r.logs)-1]
 }
 
-func (r *Raft) UpgradeTerm(term common.Term) error {
-	err := r.setTerm(term)
-	if err != nil {
-		return err
-	}
-	err = r.ResetVotedFor()
-	if err != nil {
-		return err
-	}
-	err = r.flushState()
-	return err
-}
-
 func (r *Raft) SetVotedFor(candidateID common.ServerID) error {
 	if !r.IsAbleToVoteFor(candidateID) {
 		return fmt.Errorf("failed to assign vote, already voted for %d", r.votedFor)
@@ -170,35 +169,41 @@ func (r *Raft) IsAbleToVoteFor(candidateID common.ServerID) bool {
 	return r.votedFor == 0 || r.votedFor == candidateID
 }
 
-func (r *Raft) ResetVotedFor() error {
-	r.votedFor = 0
-	return r.flushState()
+func (r *Raft) UpdateState(nextState State) error {
+	t := reflect.TypeOf(nextState).Elem()
+	r.Logger.Info("updating states to", zap.String("next_state:", t.Name()))
+	if r.state != nil {
+		r.state.Stop()
+	}
+	r.state = nextState
+	return nil
 }
 
-func (r *Raft) ChangeState(nextState State) {
-	t := reflect.TypeOf(nextState).Elem()
-	r.Logger.Info("Changine states to", zap.String("next_state:", t.Name()))
-	oldState := r.state
-	r.state = nextState
-
-	err := r.state.Start()
+func (r *Raft) HandleChangeState(c *ChangeStateEvent) {
+	err := r.UpdateState(c.NextState)
 	if err != nil {
-		r.Logger.Error("failed to start state", zap.Error(err))
 		panic(err)
 	}
-
-	if oldState == nil {
-		return
-	}
-	err = oldState.Close()
+	err = func() error {
+		err := r.setTerm(c.Term)
+		if err != nil {
+			return err
+		}
+		r.votedFor = c.VotedFor
+		return r.flushState()
+	}()
 	if err != nil {
-		r.Logger.Error("failed to close the old state", zap.Error(err))
+		r.Logger.Error("failed to update node state", zap.Error(err))
+		panic(err)
 	}
 }
 
 func (r *Raft) setTerm(newTerm common.Term) error {
 	if newTerm <= r.currentTerm {
-		return errors.New("failed to assign new term, the new term should be greater than the current term")
+		return fmt.Errorf(
+			"failed to assign new term, the new term should be greater than the current term. currentTerm: %d, newTerm: %d",
+			r.currentTerm, newTerm,
+		)
 	}
 	r.currentTerm = newTerm
 	return nil
@@ -214,24 +219,11 @@ func (r *Raft) flushState() error {
 
 func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 	switch msg.Event {
-	case protocol.EventHeartBeat:
-		appendEntriesRequest := msg.Body.(protocol.AppendEntriesRequest)
-		nextState, resp, err := r.state.HandleHeartBeat(appendEntriesRequest)
-		for nextState != nil {
-			r.ChangeState(nextState)
-			nextState, resp, err = r.state.HandleHeartBeat(appendEntriesRequest)
-		}
-		if err != nil {
-			r.Logger.Error("failed to handle heartbeat message")
-			return err
-		}
-		msg.ResponseChan <- resp
-
 	case protocol.EventAppendEntries:
 		appendEntriesRequest := msg.Body.(protocol.AppendEntriesRequest)
 		nextState, resp, err := r.state.HandleAppendEntries(appendEntriesRequest)
 		for nextState != nil {
-			r.ChangeState(nextState)
+			r.HandleChangeState(nextState)
 			nextState, resp, err = r.state.HandleAppendEntries(appendEntriesRequest)
 		}
 		if err != nil {
@@ -244,7 +236,7 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 		prevVoteRequest := msg.Body.(protocol.PreVoteRequest)
 		nextState, resp, err := r.state.HandlePreVote(prevVoteRequest)
 		for nextState != nil {
-			r.ChangeState(nextState)
+			r.HandleChangeState(nextState)
 			nextState, resp, err = r.state.HandlePreVote(prevVoteRequest)
 		}
 		if err != nil {
@@ -257,7 +249,7 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 		voteRequest := msg.Body.(protocol.VoteRequest)
 		nextState, resp, err := r.state.HandleVote(voteRequest)
 		for nextState != nil {
-			r.ChangeState(nextState)
+			r.HandleChangeState(nextState)
 			nextState, resp, err = r.state.HandleVote(voteRequest)
 		}
 		if err != nil {
