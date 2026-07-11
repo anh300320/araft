@@ -34,16 +34,17 @@ func NewFollower(r *raft.Raft, config settings.Config) *raft.Raft {
 }
 
 func (f *Follower) Run() {
+	f.isRunning = true
+	go f.run()
+}
+
+func (f *Follower) run() {
 	defer close(f.timerResetEvent)
 	defer close(f.transition)
-<<<<<<< Updated upstream
-	defer close(f.stopSignal)
 	defer func() {
 		f.isRunning = false
 	}()
 	f.isRunning = true
-=======
->>>>>>> Stashed changes
 	f.raft.Logger.Info("follower running...")
 	f.monitorHeartBeat()
 	f.raft.Logger.Info("follower stopped...")
@@ -168,9 +169,6 @@ func (f *Follower) resetElectionTimer() {
 
 func (f *Follower) Stop() {
 	f.stopSignal <- struct{}{}
-<<<<<<< Updated upstream
-=======
 	f.isRunning = false
 	defer close(f.stopSignal)
->>>>>>> Stashed changes
 }

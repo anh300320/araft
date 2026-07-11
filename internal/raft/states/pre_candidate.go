@@ -23,12 +23,12 @@ type PreCandidate struct {
 }
 
 func (p *PreCandidate) Run() {
-	defer close(p.transition)
-	defer func() {
-		p.isRunning = false
-	}()
 	p.isRunning = true
+	go p.run()
+}
 
+func (p *PreCandidate) run() {
+	defer close(p.transition)
 	responses := make(chan protocol.PreVoteResponse, len(p.raft.GetOthers()))
 
 	p.sendPreVoteRequests(responses)
@@ -181,9 +181,6 @@ func (p *PreCandidate) getHypotheticalTerm() common.Term {
 
 func (p *PreCandidate) Stop() {
 	p.stopSignal <- struct{}{}
-<<<<<<< Updated upstream
-=======
 	p.isRunning = false
 	defer close(p.stopSignal)
->>>>>>> Stashed changes
 }

@@ -25,15 +25,12 @@ type Master struct {
 }
 
 func (m *Master) Run() {
-	defer close(m.transition)
-<<<<<<< Updated upstream
-	defer close(m.stopSignal)
-	defer func() {
-		m.isRunning = false
-	}()
 	m.isRunning = true
-=======
->>>>>>> Stashed changes
+	go m.run()
+}
+
+func (m *Master) run() {
+	defer close(m.transition)
 	m.maintainHeartBeat()
 }
 
@@ -108,7 +105,6 @@ func (m *Master) maintainHeartBeat() {
 				m.handleHeartBeatResponse(resp)
 			case <-m.heartBeatTimer.C:
 				m.heartBeatTimer.Reset(heartBeatInterval)
-				isTimeout = true
 			case <-m.stopSignal:
 				return
 			}
@@ -166,9 +162,6 @@ func (m *Master) broadcastHeartBeat() chan protocol.AppendEntriesResponse {
 
 func (m *Master) Stop() {
 	m.stopSignal <- struct{}{}
-<<<<<<< Updated upstream
-=======
 	m.isRunning = false
 	defer close(m.stopSignal)
->>>>>>> Stashed changes
 }

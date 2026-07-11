@@ -101,7 +101,7 @@ func (r *Raft) Run() {
 
 	for {
 		if !r.state.IsRunning() {
-			go r.state.Run()
+			r.state.Run()
 		}
 
 		select {

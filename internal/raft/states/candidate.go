@@ -20,21 +20,12 @@ type Candidate struct {
 }
 
 func (c *Candidate) Run() {
-<<<<<<< Updated upstream
-	defer close(c.stopSignal)
-=======
 	c.isRunning = true
 	go c.run()
 }
 
 func (c *Candidate) run() {
->>>>>>> Stashed changes
 	defer close(c.transition)
-	defer func() {
-		c.isRunning = false
-	}()
-	c.isRunning = true
-
 	c.electionTimer = time.NewTimer(c.raft.RandomElectionTimeout())
 
 	responses := c.sendVoteRequests()
@@ -178,9 +169,6 @@ func (c *Candidate) GetTransition() chan *raft.ChangeStateEvent {
 
 func (c *Candidate) Stop() {
 	c.stopSignal <- struct{}{}
-<<<<<<< Updated upstream
-=======
 	c.isRunning = false
 	defer close(c.stopSignal)
->>>>>>> Stashed changes
 }
