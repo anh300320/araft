@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/persistent"
 	"github.com/anh300320/araft/internal/raft/protocol"
@@ -34,7 +35,8 @@ type Raft struct {
 	//nextIndex  []LogIndex
 	//matchIndex []LogIndex
 
-	persistent persistent.Persistent
+	persistent         persistent.NodeStatePersistent
+	logEntryPersistent persistent.LogEntryPersistent
 
 	baseElectionTimoutMs int
 }
@@ -127,12 +129,8 @@ func (r *Raft) GetCurrentTerm() common.Term {
 	return r.currentTerm
 }
 
-func (r *Raft) GetOthers() []transport.Transport {
-	peerTransports := make([]transport.Transport, len(r.peers))
-	for i, p := range r.peers {
-		peerTransports[i] = p.transport
-	}
-	return peerTransports
+func (r *Raft) GetPeers() []Peer {
+	return r.peers
 }
 
 func (r *Raft) GetCommitIndex() common.LogIndex {
@@ -150,8 +148,8 @@ func (r *Raft) GetLogEntry(logIndex common.LogIndex) common.LogEntry {
 func (r *Raft) GetLatestLogEntry() common.LogEntry {
 	if len(r.logs) == 0 {
 		return common.LogEntry{ // TODO: ?
-			Id:   0,
-			Term: 0,
+			Index: 0,
+			Term:  0,
 		}
 	}
 	return r.logs[len(r.logs)-1]
@@ -217,6 +215,15 @@ func (r *Raft) flushState() error {
 	return r.persistent.UpdateState(persistentState)
 }
 
+func (r *Raft) AppendLogEntry(logData common.LogData) (common.LogEntry, error) {
+	logEntry := common.LogEntry{
+		Index: r.lastApplied,
+		Term:  r.currentTerm,
+		Data:  logData,
+	}
+	return r.logEntryPersistent.AppendEntry(logEntry)
+}
+
 func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 	switch msg.Event {
 	case protocol.EventAppendEntries:
@@ -257,13 +264,32 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 			return err
 		}
 		msg.ResponseChan <- resp
+
+	case protocol.EventClientAppendEntry:
+		req := msg.Body.(protocol.ClientAppendEntryRequest)
+		resp, err := r.state.HandleClientAppendEntry(req)
+		if err != nil {
+			r.Logger.Error("failed to handle client append entry") // TODO add err Info
+			return err
+		}
+		msg.ResponseChan <- resp
 	}
 	return nil
 }
 
+func (r *Raft) GetLogEntriesStartAt(logIndex common.LogIndex, limit int) ([]common.LogEntry, error) {
+	return r.logEntryPersistent.GetLogEntriesStartAt(logIndex, limit)
+}
+
 type Peer struct {
-	ServerID   common.ServerID
-	nextIndex  int
-	matchIndex int
-	transport  transport.Transport
+	serverID  common.ServerID
+	transport transport.Transport
+}
+
+func (p *Peer) GetServerID() common.ServerID {
+	return p.serverID
+}
+
+func (p *Peer) GetTransport() transport.Transport {
+	return p.transport
 }

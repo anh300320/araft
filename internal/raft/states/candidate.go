@@ -60,11 +60,11 @@ func (c *Candidate) sendVoteRequests() chan protocol.VoteResponse {
 	req := protocol.VoteRequest{
 		CandidateID:  c.raft.GetServerID(),
 		Term:         c.raft.GetCurrentTerm(),
-		LastLogIndex: lastLogEntry.Id,
+		LastLogIndex: lastLogEntry.Index,
 		LastLogTerm:  lastLogEntry.Term,
 	}
 
-	peers := c.raft.GetOthers()
+	peers := c.raft.GetPeers()
 	responses := make(chan protocol.VoteResponse, len(peers))
 	var wg sync.WaitGroup
 	for _, peer := range peers {
@@ -72,7 +72,7 @@ func (c *Candidate) sendVoteRequests() chan protocol.VoteResponse {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := t.SendVote(peer, req)
+			resp, err := t.SendVote(peer.GetTransport(), req)
 			if err != nil {
 				return
 			}
@@ -155,12 +155,16 @@ func (c *Candidate) HandlePreVote(request protocol.PreVoteRequest) (*raft.Change
 
 	latestLogEntry := c.raft.GetLatestLogEntry()
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
-		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Index <= request.LastLogIndex)
 
 	return nil, protocol.PreVoteResponse{
 		Term:    c.raft.GetCurrentTerm(),
 		Granted: isNewTerm && isLogUpToDate,
 	}, nil
+}
+
+func (c *Candidate) HandleClientAppendEntry(request protocol.ClientAppendEntryRequest) (protocol.ClientAppendEntryResponse, error) {
+	return protocol.ClientAppendEntryResponse{}, nil
 }
 
 func (c *Candidate) GetTransition() chan *raft.ChangeStateEvent {

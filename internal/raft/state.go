@@ -14,6 +14,7 @@ type State interface {
 	HandleAppendEntries(request protocol.AppendEntriesRequest) (*ChangeStateEvent, protocol.AppendEntriesResponse, error)
 	HandleVote(request protocol.VoteRequest) (*ChangeStateEvent, protocol.VoteResponse, error)
 	HandlePreVote(request protocol.PreVoteRequest) (*ChangeStateEvent, protocol.PreVoteResponse, error)
+	HandleClientAppendEntry(request protocol.ClientAppendEntryRequest) (protocol.ClientAppendEntryResponse, error)
 }
 
 type ChangeStateEvent struct {

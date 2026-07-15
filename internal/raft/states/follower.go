@@ -123,7 +123,7 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEv
 
 	latestLogEntry := f.raft.GetLatestLogEntry()
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
-		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Index <= request.LastLogIndex)
 
 	if isLogUpToDate {
 		err := f.raft.SetVotedFor(request.CandidateID)
@@ -153,12 +153,16 @@ func (f *Follower) HandlePreVote(request protocol.PreVoteRequest) (*raft.ChangeS
 
 	latestLogEntry := f.raft.GetLatestLogEntry()
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
-		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Index <= request.LastLogIndex)
 
 	return nil, protocol.PreVoteResponse{
 		Term:    f.raft.GetCurrentTerm(),
 		Granted: isNewTerm && isLogUpToDate,
 	}, nil
+}
+
+func (f *Follower) HandleClientAppendEntry(request protocol.ClientAppendEntryRequest) (protocol.ClientAppendEntryResponse, error) {
+	return protocol.ClientAppendEntryResponse{}, nil
 }
 
 func (f *Follower) resetElectionTimer() {

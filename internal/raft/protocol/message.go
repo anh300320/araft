@@ -26,6 +26,9 @@ type AppendEntriesRequest struct {
 type AppendEntriesResponse struct {
 	Term        common.Term
 	IsSucceeded bool
+
+	LastLogIndex common.LogIndex
+	LastLogTerm  common.Term
 }
 
 type PreVoteRequest struct {
@@ -41,12 +44,21 @@ type PreVoteResponse struct {
 	Granted bool
 }
 
+type ClientAppendEntryRequest struct {
+	Data string
+}
+
+type ClientAppendEntryResponse struct {
+	IsSucceeded bool
+}
+
 type Event int
 
 const (
 	EventAppendEntries Event = iota
 	EventPreVote
 	EventVote
+	EventClientAppendEntry
 )
 
 type EventMessage struct {

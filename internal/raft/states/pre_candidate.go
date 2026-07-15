@@ -29,7 +29,7 @@ func (p *PreCandidate) Run() {
 
 func (p *PreCandidate) run() {
 	defer close(p.transition)
-	responses := make(chan protocol.PreVoteResponse, len(p.raft.GetOthers()))
+	responses := make(chan protocol.PreVoteResponse, len(p.raft.GetPeers()))
 
 	p.sendPreVoteRequests(responses)
 	var nextState raft.State
@@ -66,7 +66,7 @@ func (p *PreCandidate) GetTransition() chan *raft.ChangeStateEvent {
 
 func (p *PreCandidate) sendPreVoteRequests(responses chan protocol.PreVoteResponse) {
 	var wg sync.WaitGroup
-	for _, other := range p.raft.GetOthers() {
+	for _, peer := range p.raft.GetPeers() {
 		request := protocol.PreVoteRequest{
 			HypotheticalTerm: p.getHypotheticalTerm(),
 			LastLogIndex:     p.LastLogIndex,
@@ -76,11 +76,12 @@ func (p *PreCandidate) sendPreVoteRequests(responses chan protocol.PreVoteRespon
 		go func() {
 			defer wg.Done()
 			t := p.raft.GetTransport()
-			response, err := t.SendPreVote(other, request)
+			peerTransport := peer.GetTransport()
+			response, err := t.SendPreVote(peerTransport, request)
 			if err != nil {
 				p.raft.Logger.Error(
 					"failed to send pre-vote to",
-					zap.String("address", other.GetAddress()),
+					zap.String("address", peerTransport.GetAddress()),
 				)
 			} else {
 				responses <- response
@@ -145,7 +146,7 @@ func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (*raft.ChangeSta
 
 	latestLogEntry := p.raft.GetLatestLogEntry()
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
-		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Index <= request.LastLogIndex)
 	if request.Term == p.raft.GetCurrentTerm() {
 		if isLogUpToDate && p.raft.IsAbleToVoteFor(request.CandidateID) {
 			err := p.raft.SetVotedFor(request.CandidateID)
@@ -167,12 +168,16 @@ func (p *PreCandidate) HandlePreVote(request protocol.PreVoteRequest) (*raft.Cha
 
 	latestLogEntry := p.raft.GetLatestLogEntry()
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
-		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Index <= request.LastLogIndex)
 
 	return nil, protocol.PreVoteResponse{
 		Term:    p.raft.GetCurrentTerm(),
 		Granted: isGreaterTerm && isLogUpToDate,
 	}, nil
+}
+
+func (p *PreCandidate) HandleClientAppendEntry(request protocol.ClientAppendEntryRequest) (protocol.ClientAppendEntryResponse, error) {
+	return protocol.ClientAppendEntryResponse{}, nil
 }
 
 func (p *PreCandidate) getHypotheticalTerm() common.Term {
