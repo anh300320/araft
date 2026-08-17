@@ -89,7 +89,7 @@ func (c *Candidate) sendVoteRequests() chan protocol.VoteResponse {
 }
 
 func (c *Candidate) promoteToMaster(responses chan protocol.VoteResponse) bool {
-	grantedCount := 0
+	grantedCount := 1
 	receivedCount := 0
 	for {
 		select {
@@ -100,7 +100,7 @@ func (c *Candidate) promoteToMaster(responses chan protocol.VoteResponse) bool {
 			}
 			if resp.VoteGranted {
 				grantedCount += 1
-				if grantedCount >= common.GetMajorityCount(len(responses)) {
+				if grantedCount >= common.GetMajorityCount(len(responses)+1) {
 					return true
 				}
 			}

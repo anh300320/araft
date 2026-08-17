@@ -131,7 +131,6 @@ func (m *Master) handleHeartBeatResponse(response protocol.AppendEntriesResponse
 			Term:      m.raft.GetCurrentTerm(),
 		}
 	}
-	// TODO add more logic
 }
 
 type broadcastResult struct {
@@ -187,8 +186,8 @@ func (m *Master) HandleClientAppendEntry(request protocol.ClientAppendEntryReque
 	defer timeoutTimer.Stop()
 
 	receivedCount := 0
-	successCount := 0
-	for receivedCount < len(m.followers) && successCount >= common.GetMajorityCount(len(m.followers)) {
+	successCount := 1
+	for receivedCount < len(m.followers) && successCount >= common.GetMajorityCount(len(m.followers)+1) {
 		select {
 		case broadcastResult := <-broadcastResultChan:
 			receivedCount += 1

@@ -96,7 +96,7 @@ func (p *PreCandidate) sendPreVoteRequests(responses chan protocol.PreVoteRespon
 }
 
 func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteResponse) bool {
-	successCount := 0
+	successCount := 1
 	receivedCount := 0
 	electionTimer := time.NewTimer(p.raft.RandomElectionTimeout())
 	for {
@@ -108,7 +108,7 @@ func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteRespons
 			}
 			if resp.Granted {
 				successCount += 1
-				if successCount >= common.GetMajorityCount(len(responses)) {
+				if successCount >= common.GetMajorityCount(len(responses)+1) {
 					return true
 				}
 			}
