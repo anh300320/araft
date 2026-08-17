@@ -112,12 +112,17 @@ func (t *HttpTransport) handlePreVote(w http.ResponseWriter, r *http.Request) {
 	handleHttpRequest[protocol.PreVoteRequest, protocol.PreVoteResponse](t, protocol.EventPreVote, w, r)
 }
 
+func (t *HttpTransport) handleClientAppendEntry(w http.ResponseWriter, r *http.Request) {
+	handleHttpRequest[protocol.ClientAppendEntryRequest, protocol.ClientAppendEntryResponse](t, protocol.EventClientAppendEntry, w, r)
+}
+
 func (t *HttpTransport) StartListening() (chan protocol.EventMessage, error) {
 	t.events = make(chan protocol.EventMessage)
 
 	http.HandleFunc("/prevotes", t.handlePreVote)
 	http.HandleFunc("/entries", t.handleAppendEntries)
 	http.HandleFunc("/votes", t.handleVote)
+	http.HandleFunc("/user_entries", t.handleClientAppendEntry)
 
 	go func() {
 		address := fmt.Sprintf(":%d", t.port)

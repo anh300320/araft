@@ -1,7 +1,7 @@
 package common
 
 type LogEntry struct {
-	Id   LogIndex
-	Term Term
-	Data LogData
+	Index LogIndex
+	Term  Term
+	Data  LogData
 }
