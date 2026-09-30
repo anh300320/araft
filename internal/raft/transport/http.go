@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/protocol"
 	"go.uber.org/zap"
 )
@@ -18,6 +19,7 @@ type HttpTransport struct {
 	hostName string
 	port     int16
 	events   chan protocol.EventMessage
+	server   *http.Server
 }
 
 func NewHttpTransport(logger *zap.Logger, hostname string, port int) *HttpTransport {
@@ -68,12 +70,42 @@ func (t *HttpTransport) SendAppendEntries(other Transport, request protocol.Appe
 }
 
 func (t *HttpTransport) SendVote(other Transport, request protocol.VoteRequest) (protocol.VoteResponse, error) {
-	//TODO implement me
-	panic("implement me")
+	var voteResponse protocol.VoteResponse
+	body, err := json.Marshal(request)
+	if err != nil {
+		return voteResponse, fmt.Errorf("failed to marshal VoteRequest: %w", err)
+	}
+
+	voteEndpointURL, err := common.BuildURL(other.GetAddress(), "/votes")
+	if err != nil {
+		return voteResponse, fmt.Errorf("failed to build vote endpoint URL: %w", err)
+	}
+
+	t.logger.Info(
+		"sending votes",
+		zap.String("endpoint", voteEndpointURL),
+	)
+
+	resp, err := t.client.Post(
+		voteEndpointURL,
+		"application/json",
+		bytes.NewBuffer(body),
+	)
+	if err != nil {
+		t.logger.Error("failed to send vote request", zap.Error(err))
+		return voteResponse, err
+	}
+	defer resp.Body.Close()
+	err = json.NewDecoder(resp.Body).Decode(&voteResponse)
+	if err != nil {
+		return voteResponse, fmt.Errorf("failed to send vote request %w", err)
+	}
+	return voteResponse, nil
+
 }
 
 func (t *HttpTransport) GetAddress() string {
-	return t.hostName + strconv.Itoa(int(t.port))
+	return "http://" + t.hostName + ":" + strconv.Itoa(int(t.port))
 }
 
 func handleHttpRequest[TReq any, TRes any](t *HttpTransport, event protocol.Event, w http.ResponseWriter, r *http.Request) {
@@ -116,23 +148,38 @@ func (t *HttpTransport) handleClientAppendEntry(w http.ResponseWriter, r *http.R
 	handleHttpRequest[protocol.ClientAppendEntryRequest, protocol.ClientAppendEntryResponse](t, protocol.EventClientAppendEntry, w, r)
 }
 
+func (t *HttpTransport) healthCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
 func (t *HttpTransport) StartListening() (chan protocol.EventMessage, error) {
 	t.events = make(chan protocol.EventMessage)
 
-	http.HandleFunc("/prevotes", t.handlePreVote)
-	http.HandleFunc("/entries", t.handleAppendEntries)
-	http.HandleFunc("/votes", t.handleVote)
-	http.HandleFunc("/user_entries", t.handleClientAppendEntry)
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /prevotes", t.handlePreVote)
+	mux.HandleFunc("POST /entries", t.handleAppendEntries)
+	mux.HandleFunc("POST /votes", t.handleVote)
+	mux.HandleFunc("POST /user_entries", t.handleClientAppendEntry)
+	mux.HandleFunc("GET /health", t.healthCheck)
+
+	address := fmt.Sprintf(":%d", t.port)
+	t.server = &http.Server{
+		Addr:    address,
+		Handler: mux,
+	}
 
 	go func() {
-		address := fmt.Sprintf(":%d", t.port)
 		t.logger.Info(
 			"HTTP Handler running",
 			zap.Int16("port", t.port),
 		)
-		err := http.ListenAndServe(address, nil)
+
+		err := t.server.ListenAndServe()
 		if err != nil {
-			panic(err) // TODO: check this, learn panic
+			t.logger.Error("failed to start listening", zap.Error(err))
 		}
 	}()
 
@@ -146,13 +193,20 @@ func (t *HttpTransport) SendPreVote(other Transport, request protocol.PreVoteReq
 		t.logger.Error(msg)
 		return protocol.PreVoteResponse{}, ErrSerializeMessage
 	}
+	var preVoteResponse protocol.PreVoteResponse
+	preVoteEndpoint, err := common.BuildURL(other.GetAddress(), "/prevotes")
+	if err != nil {
+		t.logger.Error("failed to form prevote endpoint URL", zap.String("host", other.GetAddress()), zap.Error(err))
+		return preVoteResponse, nil
+	}
+
 	t.logger.Info(
 		"sending pre-votes",
-		zap.String("address", other.GetAddress()),
+		zap.String("endpoint", preVoteEndpoint),
 	)
-	var preVoteResponse protocol.PreVoteResponse
+
 	resp, err := t.client.Post(
-		other.GetAddress(),
+		preVoteEndpoint,
 		"application/json",
 		bytes.NewBuffer(body),
 	)

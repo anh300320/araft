@@ -61,14 +61,12 @@ func (f *Follower) GetTransition() chan *raft.ChangeStateEvent {
 func (f *Follower) monitorHeartBeat() {
 	f.timer = time.NewTimer(f.raft.RandomElectionTimeout())
 	defer f.timer.Stop()
-	f.resetElectionTimer()
 	for {
 		select {
 		case <-f.stopSignal:
 			return
 		case <-f.timer.C:
 			f.startElection()
-			return
 		case <-f.timerResetEvent:
 			f.resetElectionTimer()
 		}
@@ -77,10 +75,9 @@ func (f *Follower) monitorHeartBeat() {
 
 func (f *Follower) startElection() {
 	nextState := &PreCandidate{
-		raft:         f.raft,
-		LastLogIndex: 0,
-		LastLogTerm:  0,
-		transition:   make(chan *raft.ChangeStateEvent),
+		raft:       f.raft,
+		transition: make(chan *raft.ChangeStateEvent),
+		stopSignal: make(chan struct{}),
 	}
 	f.transition <- &raft.ChangeStateEvent{
 		NextState: nextState,
@@ -92,8 +89,13 @@ func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (*
 	f.timerResetEvent <- struct{}{}
 	if request.Term > f.raft.GetCurrentTerm() {
 		return &raft.ChangeStateEvent{
-			NextState: nil,
-			Term:      request.Term,
+			NextState: &Follower{
+				raft:            f.raft,
+				transition:      make(chan *raft.ChangeStateEvent),
+				timerResetEvent: make(chan struct{}),
+				stopSignal:      make(chan struct{}),
+			},
+			Term: request.Term,
 		}, protocol.AppendEntriesResponse{}, nil
 	}
 
@@ -111,6 +113,12 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEv
 	if request.Term > f.raft.GetCurrentTerm() {
 		return &raft.ChangeStateEvent{
 			Term: request.Term,
+			NextState: &Follower{
+				raft:            f.raft,
+				transition:      make(chan *raft.ChangeStateEvent),
+				timerResetEvent: make(chan struct{}),
+				stopSignal:      make(chan struct{}),
+			},
 		}, protocol.VoteResponse{}, nil
 	}
 
@@ -133,7 +141,7 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEv
 				VoteGranted: false,
 			}, err
 		}
-		f.resetElectionTimer()
+		f.timerResetEvent <- struct{}{}
 
 		return nil, protocol.VoteResponse{
 			Term:        f.raft.GetCurrentTerm(),

@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/persistent"
 	"github.com/anh300320/araft/internal/raft/protocol"
@@ -82,7 +81,7 @@ func buildPeers(logger *zap.Logger, config settings.Config) []Peer {
 			continue
 		}
 		peers = append(peers, Peer{
-			ServerID: common.ServerID(peerConfig.ServerID),
+			serverID: common.ServerID(peerConfig.ServerID),
 			transport: transport.NewHttpTransport(
 				logger, // TODO: use a different logger here
 				peerConfig.Hostname,
@@ -197,7 +196,7 @@ func (r *Raft) HandleChangeState(c *ChangeStateEvent) {
 }
 
 func (r *Raft) setTerm(newTerm common.Term) error {
-	if newTerm <= r.currentTerm {
+	if newTerm < r.currentTerm {
 		return fmt.Errorf(
 			"failed to assign new term, the new term should be greater than the current term. currentTerm: %d, newTerm: %d",
 			r.currentTerm, newTerm,

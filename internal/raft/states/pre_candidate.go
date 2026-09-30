@@ -13,9 +13,6 @@ import (
 type PreCandidate struct {
 	raft *raft.Raft
 
-	LastLogIndex common.LogIndex
-	LastLogTerm  common.Term
-
 	isRunning bool
 
 	transition chan *raft.ChangeStateEvent
@@ -29,15 +26,16 @@ func (p *PreCandidate) Run() {
 
 func (p *PreCandidate) run() {
 	defer close(p.transition)
-	responses := make(chan protocol.PreVoteResponse, len(p.raft.GetPeers()))
 
-	p.sendPreVoteRequests(responses)
+	p.raft.Logger.Info("pre-candidate running...")
+	responses := p.sendPreVoteRequests()
 	var nextState raft.State
 	nextTerm := p.raft.GetCurrentTerm()
 	if p.promoteToCandidate(responses) {
 		nextState = &Candidate{
 			raft:       p.raft,
 			transition: make(chan *raft.ChangeStateEvent),
+			stopSignal: make(chan struct{}),
 		}
 		nextTerm += 1
 	} else {
@@ -46,6 +44,7 @@ func (p *PreCandidate) run() {
 			isRunning:       false,
 			transition:      make(chan *raft.ChangeStateEvent),
 			timerResetEvent: make(chan struct{}),
+			stopSignal:      make(chan struct{}),
 		}
 	}
 	p.transition <- &raft.ChangeStateEvent{
@@ -53,7 +52,9 @@ func (p *PreCandidate) run() {
 		Term:      nextTerm,
 		VotedFor:  p.raft.GetServerID(),
 	}
+	p.raft.Logger.Info("reached here")
 	<-p.stopSignal
+	p.raft.Logger.Info("pre-candidate stopped...")
 }
 
 func (p *PreCandidate) IsRunning() bool {
@@ -64,13 +65,15 @@ func (p *PreCandidate) GetTransition() chan *raft.ChangeStateEvent {
 	return p.transition
 }
 
-func (p *PreCandidate) sendPreVoteRequests(responses chan protocol.PreVoteResponse) {
+func (p *PreCandidate) sendPreVoteRequests() chan protocol.PreVoteResponse {
+	lastLogEntry := p.raft.GetLatestLogEntry()
+	responses := make(chan protocol.PreVoteResponse, len(p.raft.GetPeers()))
 	var wg sync.WaitGroup
 	for _, peer := range p.raft.GetPeers() {
 		request := protocol.PreVoteRequest{
 			HypotheticalTerm: p.getHypotheticalTerm(),
-			LastLogIndex:     p.LastLogIndex,
-			LastLogTerm:      p.LastLogTerm,
+			LastLogIndex:     lastLogEntry.Index,
+			LastLogTerm:      lastLogEntry.Term,
 		}
 		wg.Add(1)
 		go func() {
@@ -92,7 +95,10 @@ func (p *PreCandidate) sendPreVoteRequests(responses chan protocol.PreVoteRespon
 	go func() {
 		wg.Wait()
 		close(responses)
+		p.raft.Logger.Info("responses channel closed")
 	}()
+
+	return responses
 }
 
 func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteResponse) bool {
@@ -101,16 +107,17 @@ func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteRespons
 	electionTimer := time.NewTimer(p.raft.RandomElectionTimeout())
 	for {
 		select {
-		case resp := <-responses:
+		case resp, ok := <-responses:
+			p.raft.Logger.Info("reponses channel status", zap.Bool("status", ok))
 			receivedCount += 1
-			if receivedCount > len(responses) {
-				return false
-			}
 			if resp.Granted {
 				successCount += 1
 				if successCount >= common.GetMajorityCount(len(responses)+1) {
 					return true
 				}
+			}
+			if receivedCount >= len(responses) || !ok {
+				return false
 			}
 		case <-electionTimer.C:
 			return false
@@ -185,7 +192,9 @@ func (p *PreCandidate) getHypotheticalTerm() common.Term {
 }
 
 func (p *PreCandidate) Stop() {
+	p.raft.Logger.Info("send stop signal to pre-candidate")
 	p.stopSignal <- struct{}{}
+	p.raft.Logger.Info("send stop signal to pre-candidate successfully")
 	p.isRunning = false
 	defer close(p.stopSignal)
 }
