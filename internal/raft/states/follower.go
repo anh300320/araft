@@ -45,9 +45,9 @@ func (f *Follower) run() {
 		f.isRunning = false
 	}()
 	f.isRunning = true
-	f.raft.Logger.Info("follower running...")
+	f.raft.Logger().Info("follower running...")
 	f.monitorHeartBeat()
-	f.raft.Logger.Info("follower stopped...")
+	f.raft.Logger().Info("follower stopped...")
 }
 
 func (f *Follower) IsRunning() bool {
@@ -103,6 +103,11 @@ func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (*
 }
 
 func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEvent, protocol.VoteResponse, error) {
+	f.raft.Logger().Info(
+		"handling vote request", zap.Int32("request_term", request.Term),
+		zap.Int("candidate_id", int(request.CandidateID)),
+		zap.Int("current_term", int(f.raft.GetCurrentTerm())),
+	)
 	if request.Term < f.raft.GetCurrentTerm() {
 		return nil, protocol.VoteResponse{
 			Term:        f.raft.GetCurrentTerm(),
@@ -136,6 +141,7 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEv
 	if isLogUpToDate {
 		err := f.raft.SetVotedFor(request.CandidateID)
 		if err != nil {
+			f.raft.Logger().Error("failed to set voted for", zap.Int("candidate_id", int(request.CandidateID)), zap.Error(err))
 			return nil, protocol.VoteResponse{
 				Term:        f.raft.GetCurrentTerm(),
 				VoteGranted: false,
@@ -143,12 +149,14 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEv
 		}
 		f.timerResetEvent <- struct{}{}
 
+		f.raft.Logger().Info("grant vote for candidate", zap.Int("candidate_id", int(request.CandidateID)), zap.Error(err))
 		return nil, protocol.VoteResponse{
 			Term:        f.raft.GetCurrentTerm(),
 			VoteGranted: true,
 		}, nil
 	}
 
+	f.raft.Logger().Info("refuse to grant vote for candidate", zap.Int("candidate_id", int(request.CandidateID)))
 	return nil, protocol.VoteResponse{
 		Term:        f.raft.GetCurrentTerm(),
 		VoteGranted: false,
@@ -175,7 +183,7 @@ func (f *Follower) HandleClientAppendEntry(request protocol.ClientAppendEntryReq
 
 func (f *Follower) resetElectionTimer() {
 	timeout := f.raft.RandomElectionTimeout()
-	f.raft.Logger.Info("Resetting election timer", zap.Int("timeout_ms", int(timeout.Milliseconds())))
+	f.raft.Logger().Info("Resetting election timer", zap.Int("timeout_ms", int(timeout.Milliseconds())))
 	f.timer.Reset(timeout)
 }
 

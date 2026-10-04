@@ -27,7 +27,7 @@ func (p *PreCandidate) Run() {
 func (p *PreCandidate) run() {
 	defer close(p.transition)
 
-	p.raft.Logger.Info("pre-candidate running...")
+	p.raft.Logger().Info("pre-candidate running...")
 	responses := p.sendPreVoteRequests()
 	var nextState raft.State
 	nextTerm := p.raft.GetCurrentTerm()
@@ -52,9 +52,9 @@ func (p *PreCandidate) run() {
 		Term:      nextTerm,
 		VotedFor:  p.raft.GetServerID(),
 	}
-	p.raft.Logger.Info("reached here")
+	p.raft.Logger().Info("reached here")
 	<-p.stopSignal
-	p.raft.Logger.Info("pre-candidate stopped...")
+	p.raft.Logger().Info("pre-candidate stopped...")
 }
 
 func (p *PreCandidate) IsRunning() bool {
@@ -82,7 +82,7 @@ func (p *PreCandidate) sendPreVoteRequests() chan protocol.PreVoteResponse {
 			peerTransport := peer.GetTransport()
 			response, err := t.SendPreVote(peerTransport, request)
 			if err != nil {
-				p.raft.Logger.Error(
+				p.raft.Logger().Error(
 					"failed to send pre-vote to",
 					zap.String("address", peerTransport.GetAddress()),
 				)
@@ -95,7 +95,7 @@ func (p *PreCandidate) sendPreVoteRequests() chan protocol.PreVoteResponse {
 	go func() {
 		wg.Wait()
 		close(responses)
-		p.raft.Logger.Info("responses channel closed")
+		p.raft.Logger().Info("responses channel closed")
 	}()
 
 	return responses
@@ -108,7 +108,7 @@ func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteRespons
 	for {
 		select {
 		case resp, ok := <-responses:
-			p.raft.Logger.Info("reponses channel status", zap.Bool("status", ok))
+			p.raft.Logger().Info("reponses channel status", zap.Bool("status", ok))
 			receivedCount += 1
 			if resp.Granted {
 				successCount += 1
@@ -192,9 +192,9 @@ func (p *PreCandidate) getHypotheticalTerm() common.Term {
 }
 
 func (p *PreCandidate) Stop() {
-	p.raft.Logger.Info("send stop signal to pre-candidate")
+	p.raft.Logger().Info("send stop signal to pre-candidate")
 	p.stopSignal <- struct{}{}
-	p.raft.Logger.Info("send stop signal to pre-candidate successfully")
+	p.raft.Logger().Info("send stop signal to pre-candidate successfully")
 	p.isRunning = false
 	defer close(p.stopSignal)
 }

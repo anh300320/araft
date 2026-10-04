@@ -100,6 +100,7 @@ func (t *HttpTransport) SendVote(other Transport, request protocol.VoteRequest) 
 	if err != nil {
 		return voteResponse, fmt.Errorf("failed to send vote request %w", err)
 	}
+	t.logger.Info("received Vote response", zap.String("address", other.GetAddress()), zap.Int32("term", int32(voteResponse.Term)), zap.Bool("granted", voteResponse.VoteGranted))
 	return voteResponse, nil
 
 }
@@ -219,5 +220,6 @@ func (t *HttpTransport) SendPreVote(other Transport, request protocol.PreVoteReq
 	if err != nil {
 		return preVoteResponse, fmt.Errorf("failed to send pre vote request %w", err)
 	}
+	t.logger.Info("received pre-vote response", zap.Int32("term", int32(preVoteResponse.Term)), zap.Bool("granted", preVoteResponse.Granted))
 	return preVoteResponse, nil
 }

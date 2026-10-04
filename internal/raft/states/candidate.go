@@ -7,6 +7,7 @@ import (
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/common"
 	"github.com/anh300320/araft/internal/raft/protocol"
+	"go.uber.org/zap"
 )
 
 type Candidate struct {
@@ -25,6 +26,7 @@ func (c *Candidate) Run() {
 }
 
 func (c *Candidate) run() {
+	// FIXME: split brain issue, there are cases where 2 master exist at the same time
 	defer close(c.transition)
 	c.electionTimer = time.NewTimer(c.raft.RandomElectionTimeout())
 
@@ -64,6 +66,11 @@ func (c *Candidate) sendVoteRequests() chan protocol.VoteResponse {
 		LastLogTerm:  lastLogEntry.Term,
 	}
 
+	c.raft.Logger().Info(
+		"asking for vote",
+		zap.Int("Last_log_index", int(req.LastLogIndex)),
+		zap.Int("last_log_term", int(req.LastLogTerm)),
+	)
 	peers := c.raft.GetPeers()
 	responses := make(chan protocol.VoteResponse, len(peers))
 	var wg sync.WaitGroup
@@ -93,20 +100,25 @@ func (c *Candidate) promoteToMaster(responses chan protocol.VoteResponse) bool {
 	receivedCount := 0
 	for {
 		select {
-		case resp := <-responses:
+		case resp, ok := <-responses:
 			receivedCount += 1
-			if receivedCount > len(responses) {
+			if receivedCount >= len(responses) && !ok {
+				c.raft.Logger().Info("responses channel for vote requests has been closed")
 				return false
 			}
 			if resp.VoteGranted {
 				grantedCount += 1
-				if grantedCount >= common.GetMajorityCount(len(responses)+1) {
+				majorityCnt := common.GetMajorityCount(len(responses) + 1)
+				c.raft.Logger().Info("checking promote condition", zap.Int("granted_count", grantedCount), zap.Int("majority_count", majorityCnt))
+				if grantedCount >= majorityCnt {
 					return true
 				}
 			}
 		case <-c.stopSignal:
+			c.raft.Logger().Info("the candidate has received stop signal")
 			return false
 		case <-c.electionTimer.C:
+			c.raft.Logger().Info("candidate election timer timeout")
 			return false
 		}
 	}

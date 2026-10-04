@@ -33,7 +33,7 @@ type AppendEntriesResponse struct {
 
 type PreVoteRequest struct {
 	HypotheticalTerm common.Term
-	serverID         common.ServerID
+	ServerID         common.ServerID
 	LastLogIndex     common.LogIndex
 	LastLogTerm      common.Term
 	CommitIndex      common.LogIndex

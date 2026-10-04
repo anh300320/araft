@@ -64,7 +64,7 @@ func (m *Master) HandleAppendEntries(request protocol.AppendEntriesRequest) (*ra
 	}
 
 	if request.Term == m.raft.GetCurrentTerm() {
-		m.raft.Logger.Warn("detected another leader with the same term", zap.Int64("peer_node_id", int64(int(request.MasterID))))
+		m.raft.Logger().Warn("detected another leader with the same term", zap.Int64("peer_node_id", int64(int(request.MasterID))))
 	}
 
 	return nil, protocol.AppendEntriesResponse{
@@ -159,7 +159,7 @@ func (m *Master) broadcastHeartBeat() chan broadcastResult {
 			peerTransport := peer.GetTransport()
 			resp, err := t.SendAppendEntries(peerTransport, req)
 			if err != nil {
-				m.raft.Logger.Error("failed to send heartbeat", zap.String("address", peerTransport.GetAddress()), zap.Error(err))
+				m.raft.Logger().Error("failed to send heartbeat", zap.String("address", peerTransport.GetAddress()), zap.Error(err))
 			}
 			broadcastResultChan <- broadcastResult{
 				followerID: peer.GetServerID(),
@@ -192,7 +192,7 @@ func (m *Master) HandleClientAppendEntry(request protocol.ClientAppendEntryReque
 		case broadcastResult := <-broadcastResultChan:
 			receivedCount += 1
 			if broadcastResult.err != nil {
-				m.raft.Logger.Error("failed to broadcast new entry to follower", zap.Int("followerID", int(broadcastResult.followerID)))
+				m.raft.Logger().Error("failed to broadcast new entry to follower", zap.Int("followerID", int(broadcastResult.followerID)))
 				continue
 			}
 			m.handleAppendEntriesResponse(broadcastResult.followerID, broadcastResult.resp)
@@ -231,7 +231,7 @@ func (m *Master) broadcastClientAppendEntry(logEntry common.LogEntry) chan broad
 			defer wg.Done()
 			resp, err := m.appendEntries(peer, logEntry)
 			if err != nil {
-				m.raft.Logger.Error(
+				m.raft.Logger().Error(
 					"failed to replicate log to peer = %d, err = %w",
 					zap.Int32("follower_id", peer.GetServerID()),
 					zap.Error(err),

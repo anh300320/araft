@@ -26,7 +26,7 @@ type Raft struct {
 	lastApplied common.LogIndex
 
 	state  State
-	Logger *zap.Logger
+	logger *zap.Logger
 
 	transport transport.Transport
 	peers     []Peer
@@ -60,7 +60,7 @@ func NewRaftNode(logger *zap.Logger, config settings.Config) *Raft {
 		commitIndex: 0,
 		lastApplied: 0,
 		state:       nil,
-		Logger: logger.With(
+		logger: logger.With(
 			zap.Int("node_id", config.NodeID),
 		),
 		transport:            nodeTransport,
@@ -95,16 +95,12 @@ func buildPeers(logger *zap.Logger, config settings.Config) []Peer {
 func (r *Raft) Run() {
 	eventChan, err := r.transport.StartListening()
 	if err != nil {
-		r.Logger.Fatal("failed to start listening to messages")
+		r.Logger().Fatal("failed to start listening to messages")
 		panic(err) // TODO check?
 	}
 	defer close(eventChan)
 
 	for {
-		if !r.state.IsRunning() {
-			r.state.Run()
-		}
-
 		select {
 		case nextState := <-r.state.GetTransition():
 			r.HandleChangeState(nextState)
@@ -114,7 +110,7 @@ func (r *Raft) Run() {
 			}
 			err := r.handleMessage(event)
 			if err != nil {
-				r.Logger.Error("failed to handle event", zap.Error(err))
+				r.Logger().Error("failed to handle event", zap.Error(err))
 			}
 		}
 	}
@@ -168,11 +164,12 @@ func (r *Raft) IsAbleToVoteFor(candidateID common.ServerID) bool {
 
 func (r *Raft) UpdateState(nextState State) error {
 	t := reflect.TypeOf(nextState).Elem()
-	r.Logger.Info("updating states to", zap.String("next_state:", t.Name()))
+	r.Logger().Info("updating states to", zap.String("next_state:", t.Name()))
 	if r.state != nil {
 		r.state.Stop()
 	}
 	r.state = nextState
+	r.state.Run()
 	return nil
 }
 
@@ -190,7 +187,7 @@ func (r *Raft) HandleChangeState(c *ChangeStateEvent) {
 		return r.flushState()
 	}()
 	if err != nil {
-		r.Logger.Error("failed to update node state", zap.Error(err))
+		r.Logger().Error("failed to update node state", zap.Error(err))
 		panic(err)
 	}
 }
@@ -233,7 +230,7 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 			nextState, resp, err = r.state.HandleAppendEntries(appendEntriesRequest)
 		}
 		if err != nil {
-			r.Logger.Error("failed to handle heartbeat message")
+			r.Logger().Error("failed to handle heartbeat message")
 			return err
 		}
 		msg.ResponseChan <- resp
@@ -246,7 +243,7 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 			nextState, resp, err = r.state.HandlePreVote(prevVoteRequest)
 		}
 		if err != nil {
-			r.Logger.Error("failed tp handle prevote message")
+			r.Logger().Error("failed tp handle prevote message")
 			return err
 		}
 		msg.ResponseChan <- resp
@@ -259,7 +256,7 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 			nextState, resp, err = r.state.HandleVote(voteRequest)
 		}
 		if err != nil {
-			r.Logger.Error("failed to handle vote message")
+			r.Logger().Error("failed to handle vote message")
 			return err
 		}
 		msg.ResponseChan <- resp
@@ -268,7 +265,7 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 		req := msg.Body.(protocol.ClientAppendEntryRequest)
 		resp, err := r.state.HandleClientAppendEntry(req)
 		if err != nil {
-			r.Logger.Error("failed to handle client append entry") // TODO add err Info
+			r.Logger().Error("failed to handle client append entry") // TODO add err Info
 			return err
 		}
 		msg.ResponseChan <- resp
@@ -278,6 +275,12 @@ func (r *Raft) handleMessage(msg protocol.EventMessage) error {
 
 func (r *Raft) GetLogEntriesStartAt(logIndex common.LogIndex, limit int) ([]common.LogEntry, error) {
 	return r.logEntryPersistent.GetLogEntriesStartAt(logIndex, limit)
+}
+
+func (r *Raft) Logger() *zap.Logger {
+	return r.logger.With(
+		zap.Int("current_term", int(r.currentTerm)),
+	)
 }
 
 type Peer struct {
