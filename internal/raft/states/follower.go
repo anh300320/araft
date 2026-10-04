@@ -45,9 +45,9 @@ func (f *Follower) run() {
 		f.isRunning = false
 	}()
 	f.isRunning = true
-	f.raft.Logger.Info("follower running...")
+	f.raft.Logger().Info("follower running...")
 	f.monitorHeartBeat()
-	f.raft.Logger.Info("follower stopped...")
+	f.raft.Logger().Info("follower stopped...")
 }
 
 func (f *Follower) IsRunning() bool {
@@ -61,14 +61,12 @@ func (f *Follower) GetTransition() chan *raft.ChangeStateEvent {
 func (f *Follower) monitorHeartBeat() {
 	f.timer = time.NewTimer(f.raft.RandomElectionTimeout())
 	defer f.timer.Stop()
-	f.resetElectionTimer()
 	for {
 		select {
 		case <-f.stopSignal:
 			return
 		case <-f.timer.C:
 			f.startElection()
-			return
 		case <-f.timerResetEvent:
 			f.resetElectionTimer()
 		}
@@ -77,10 +75,9 @@ func (f *Follower) monitorHeartBeat() {
 
 func (f *Follower) startElection() {
 	nextState := &PreCandidate{
-		raft:         f.raft,
-		LastLogIndex: 0,
-		LastLogTerm:  0,
-		transition:   make(chan *raft.ChangeStateEvent),
+		raft:       f.raft,
+		transition: make(chan *raft.ChangeStateEvent),
+		stopSignal: make(chan struct{}),
 	}
 	f.transition <- &raft.ChangeStateEvent{
 		NextState: nextState,
@@ -92,8 +89,13 @@ func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (*
 	f.timerResetEvent <- struct{}{}
 	if request.Term > f.raft.GetCurrentTerm() {
 		return &raft.ChangeStateEvent{
-			NextState: nil,
-			Term:      request.Term,
+			NextState: &Follower{
+				raft:            f.raft,
+				transition:      make(chan *raft.ChangeStateEvent),
+				timerResetEvent: make(chan struct{}),
+				stopSignal:      make(chan struct{}),
+			},
+			Term: request.Term,
 		}, protocol.AppendEntriesResponse{}, nil
 	}
 
@@ -101,6 +103,11 @@ func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (*
 }
 
 func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEvent, protocol.VoteResponse, error) {
+	f.raft.Logger().Info(
+		"handling vote request", zap.Int32("request_term", request.Term),
+		zap.Int("candidate_id", int(request.CandidateID)),
+		zap.Int("current_term", int(f.raft.GetCurrentTerm())),
+	)
 	if request.Term < f.raft.GetCurrentTerm() {
 		return nil, protocol.VoteResponse{
 			Term:        f.raft.GetCurrentTerm(),
@@ -111,6 +118,12 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEv
 	if request.Term > f.raft.GetCurrentTerm() {
 		return &raft.ChangeStateEvent{
 			Term: request.Term,
+			NextState: &Follower{
+				raft:            f.raft,
+				transition:      make(chan *raft.ChangeStateEvent),
+				timerResetEvent: make(chan struct{}),
+				stopSignal:      make(chan struct{}),
+			},
 		}, protocol.VoteResponse{}, nil
 	}
 
@@ -123,24 +136,27 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEv
 
 	latestLogEntry := f.raft.GetLatestLogEntry()
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
-		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Index <= request.LastLogIndex)
 
 	if isLogUpToDate {
 		err := f.raft.SetVotedFor(request.CandidateID)
 		if err != nil {
+			f.raft.Logger().Error("failed to set voted for", zap.Int("candidate_id", int(request.CandidateID)), zap.Error(err))
 			return nil, protocol.VoteResponse{
 				Term:        f.raft.GetCurrentTerm(),
 				VoteGranted: false,
 			}, err
 		}
-		f.resetElectionTimer()
+		f.timerResetEvent <- struct{}{}
 
+		f.raft.Logger().Info("grant vote for candidate", zap.Int("candidate_id", int(request.CandidateID)), zap.Error(err))
 		return nil, protocol.VoteResponse{
 			Term:        f.raft.GetCurrentTerm(),
 			VoteGranted: true,
 		}, nil
 	}
 
+	f.raft.Logger().Info("refuse to grant vote for candidate", zap.Int("candidate_id", int(request.CandidateID)))
 	return nil, protocol.VoteResponse{
 		Term:        f.raft.GetCurrentTerm(),
 		VoteGranted: false,
@@ -153,7 +169,7 @@ func (f *Follower) HandlePreVote(request protocol.PreVoteRequest) (*raft.ChangeS
 
 	latestLogEntry := f.raft.GetLatestLogEntry()
 	isLogUpToDate := latestLogEntry.Term < request.LastLogTerm ||
-		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Id <= request.LastLogIndex)
+		(latestLogEntry.Term == request.LastLogTerm && latestLogEntry.Index <= request.LastLogIndex)
 
 	return nil, protocol.PreVoteResponse{
 		Term:    f.raft.GetCurrentTerm(),
@@ -161,9 +177,13 @@ func (f *Follower) HandlePreVote(request protocol.PreVoteRequest) (*raft.ChangeS
 	}, nil
 }
 
+func (f *Follower) HandleClientAppendEntry(request protocol.ClientAppendEntryRequest) (protocol.ClientAppendEntryResponse, error) {
+	return protocol.ClientAppendEntryResponse{}, nil
+}
+
 func (f *Follower) resetElectionTimer() {
 	timeout := f.raft.RandomElectionTimeout()
-	f.raft.Logger.Info("Resetting election timer", zap.Int("timeout_ms", int(timeout.Milliseconds())))
+	f.raft.Logger().Info("Resetting election timer", zap.Int("timeout_ms", int(timeout.Milliseconds())))
 	f.timer.Reset(timeout)
 }
 
