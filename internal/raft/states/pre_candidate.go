@@ -37,11 +37,10 @@ func (p *PreCandidate) run() {
 			transition: make(chan *raft.ChangeStateEvent),
 			stopSignal: make(chan struct{}),
 		}
-		nextTerm += 1
+		nextTerm = p.getHypotheticalTerm()
 	} else {
 		nextState = &Follower{
 			raft:            p.raft,
-			isRunning:       false,
 			transition:      make(chan *raft.ChangeStateEvent),
 			timerResetEvent: make(chan struct{}),
 			stopSignal:      make(chan struct{}),
@@ -112,7 +111,7 @@ func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteRespons
 			receivedCount += 1
 			if resp.Granted {
 				successCount += 1
-				if successCount >= common.GetMajorityCount(len(responses)+1) {
+				if successCount >= common.GetMajorityCount(len(p.raft.GetPeers())+1) {
 					return true
 				}
 			}
@@ -126,7 +125,26 @@ func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteRespons
 }
 
 func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (*raft.ChangeStateEvent, protocol.AppendEntriesResponse, error) {
-	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
+	lastLogEntry := p.raft.GetLatestLogEntry()
+	response := protocol.AppendEntriesResponse{
+		Term:         p.raft.GetCurrentTerm(),
+		IsSucceeded:  false,
+		LastLogIndex: lastLogEntry.Index,
+		LastLogTerm:  lastLogEntry.Term,
+	}
+	if p.raft.GetCurrentTerm() <= request.Term {
+		return &raft.ChangeStateEvent{
+			NextState: &Follower{
+				raft:            p.raft,
+				transition:      make(chan *raft.ChangeStateEvent),
+				timerResetEvent: make(chan struct{}),
+				stopSignal:      make(chan struct{}),
+			},
+			Term: request.Term,
+		}, response, nil
+	}
+
+	return nil, response, nil
 }
 
 func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEvent, protocol.VoteResponse, error) {

@@ -87,7 +87,14 @@ func (f *Follower) startElection() {
 
 func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (*raft.ChangeStateEvent, protocol.AppendEntriesResponse, error) {
 	f.timerResetEvent <- struct{}{}
-	if request.Term > f.raft.GetCurrentTerm() {
+	lastLogEntry := f.raft.GetLatestLogEntry()
+	response := protocol.AppendEntriesResponse{
+		IsSucceeded:  false,
+		Term:         f.raft.GetCurrentTerm(),
+		LastLogIndex: lastLogEntry.Index,
+		LastLogTerm:  lastLogEntry.Term,
+	}
+	if f.raft.GetCurrentTerm() < request.Term {
 		return &raft.ChangeStateEvent{
 			NextState: &Follower{
 				raft:            f.raft,
@@ -96,10 +103,15 @@ func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (*
 				stopSignal:      make(chan struct{}),
 			},
 			Term: request.Term,
-		}, protocol.AppendEntriesResponse{}, nil
+		}, response, nil
 	}
 
-	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
+	if f.raft.GetCurrentTerm() > request.Term {
+		return nil, response, nil
+	}
+
+	response.IsSucceeded = true
+	return nil, response, nil
 }
 
 func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEvent, protocol.VoteResponse, error) {

@@ -36,7 +36,6 @@ type PreVoteRequest struct {
 	ServerID         common.ServerID
 	LastLogIndex     common.LogIndex
 	LastLogTerm      common.Term
-	CommitIndex      common.LogIndex
 }
 
 type PreVoteResponse struct {

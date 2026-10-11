@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -39,6 +40,39 @@ func NewHttpTransportWithAddress(logger *zap.Logger, hostname string, port int) 
 	}
 }
 
+func (t *HttpTransport) StartListening() (chan protocol.EventMessage, error) {
+	t.events = make(chan protocol.EventMessage)
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /prevotes", t.handlePreVote)
+	mux.HandleFunc("POST /entries", t.handleAppendEntries)
+	mux.HandleFunc("POST /votes", t.handleVote)
+	mux.HandleFunc("POST /user_entries", t.handleClientAppendEntry)
+	mux.HandleFunc("GET /health", t.healthCheck)
+
+	address := fmt.Sprintf(":%d", t.port)
+	t.server = &http.Server{
+		Addr:    address,
+		Handler: mux,
+	}
+
+	go func() {
+		t.logger.Info(
+			"HTTP Handler running",
+			zap.Int16("port", t.port),
+		)
+
+		err := t.server.ListenAndServe()
+		if err != nil {
+			t.logger.Error("failed to start listening", zap.Error(err))
+		}
+		t.logger.Warn("HTTP server has been stopped")
+	}()
+
+	return t.events, nil
+}
+
 func (t *HttpTransport) SendAppendEntries(other Transport, request protocol.AppendEntriesRequest) (protocol.AppendEntriesResponse, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -52,8 +86,12 @@ func (t *HttpTransport) SendAppendEntries(other Transport, request protocol.Appe
 		zap.String("address", other.GetAddress()),
 	)
 	var appendEntriesResponse protocol.AppendEntriesResponse
+	appendEntriesEndpoint, err := common.BuildURL(other.GetAddress(), "/entries")
+	if err != nil {
+		return appendEntriesResponse, err
+	}
 	resp, err := t.client.Post(
-		other.GetAddress(),
+		appendEntriesEndpoint,
 		"application/json",
 		bytes.NewBuffer(body),
 	)
@@ -62,9 +100,20 @@ func (t *HttpTransport) SendAppendEntries(other Transport, request protocol.Appe
 		return appendEntriesResponse, err
 	}
 	defer resp.Body.Close()
-	err = json.NewDecoder(resp.Body).Decode(&appendEntriesResponse)
+
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return appendEntriesResponse, fmt.Errorf("failed to send append entries %w", err)
+		return appendEntriesResponse, fmt.Errorf("failed to read response body: %w", err)
+	}
+	t.logger.Info(
+		"received append entries response",
+		zap.Int("status", resp.StatusCode),
+		zap.ByteString("body", respBody),
+	)
+
+	err = json.Unmarshal(respBody, &appendEntriesResponse)
+	if err != nil {
+		return appendEntriesResponse, fmt.Errorf("failed to unmarshal append entries response %w", err)
 	}
 	return appendEntriesResponse, nil
 }
@@ -153,38 +202,6 @@ func (t *HttpTransport) healthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
-}
-
-func (t *HttpTransport) StartListening() (chan protocol.EventMessage, error) {
-	t.events = make(chan protocol.EventMessage)
-
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("POST /prevotes", t.handlePreVote)
-	mux.HandleFunc("POST /entries", t.handleAppendEntries)
-	mux.HandleFunc("POST /votes", t.handleVote)
-	mux.HandleFunc("POST /user_entries", t.handleClientAppendEntry)
-	mux.HandleFunc("GET /health", t.healthCheck)
-
-	address := fmt.Sprintf(":%d", t.port)
-	t.server = &http.Server{
-		Addr:    address,
-		Handler: mux,
-	}
-
-	go func() {
-		t.logger.Info(
-			"HTTP Handler running",
-			zap.Int16("port", t.port),
-		)
-
-		err := t.server.ListenAndServe()
-		if err != nil {
-			t.logger.Error("failed to start listening", zap.Error(err))
-		}
-	}()
-
-	return t.events, nil
 }
 
 func (t *HttpTransport) SendPreVote(other Transport, request protocol.PreVoteRequest) (protocol.PreVoteResponse, error) {

@@ -108,7 +108,7 @@ func (c *Candidate) promoteToMaster(responses chan protocol.VoteResponse) bool {
 			}
 			if resp.VoteGranted {
 				grantedCount += 1
-				majorityCnt := common.GetMajorityCount(len(responses) + 1)
+				majorityCnt := common.GetMajorityCount(len(c.raft.GetPeers()) + 1)
 				c.raft.Logger().Info("checking promote condition", zap.Int("granted_count", grantedCount), zap.Int("majority_count", majorityCnt))
 				if grantedCount >= majorityCnt {
 					return true
@@ -125,7 +125,27 @@ func (c *Candidate) promoteToMaster(responses chan protocol.VoteResponse) bool {
 }
 
 func (c *Candidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (*raft.ChangeStateEvent, protocol.AppendEntriesResponse, error) {
-	return nil, protocol.AppendEntriesResponse{IsSucceeded: false}, nil
+	lastLogEntry := c.raft.GetLatestLogEntry()
+	response := protocol.AppendEntriesResponse{
+		Term:         c.raft.GetCurrentTerm(),
+		IsSucceeded:  false,
+		LastLogIndex: lastLogEntry.Index,
+		LastLogTerm:  lastLogEntry.Term,
+	}
+	if c.raft.GetCurrentTerm() <= request.Term {
+		nextState := &Follower{
+			raft:            c.raft,
+			transition:      make(chan *raft.ChangeStateEvent),
+			timerResetEvent: make(chan struct{}),
+			stopSignal:      make(chan struct{}),
+		}
+		return &raft.ChangeStateEvent{
+			NextState: nextState,
+			Term:      request.Term,
+		}, response, nil
+	}
+
+	return nil, response, nil
 }
 
 func (c *Candidate) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEvent, protocol.VoteResponse, error) {

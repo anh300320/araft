@@ -64,7 +64,7 @@ func (m *Master) HandleAppendEntries(request protocol.AppendEntriesRequest) (*ra
 	}
 
 	if request.Term == m.raft.GetCurrentTerm() {
-		m.raft.Logger().Warn("detected another leader with the same term", zap.Int64("peer_node_id", int64(int(request.MasterID))))
+		m.raft.Logger().Fatal("detected another leader with the same term", zap.Int64("peer_node_id", int64(int(request.MasterID))))
 	}
 
 	return nil, protocol.AppendEntriesResponse{
@@ -99,7 +99,7 @@ func (m *Master) HandlePreVote(request protocol.PreVoteRequest) (*raft.ChangeSta
 }
 
 func (m *Master) maintainHeartBeat() {
-	heartBeatInterval := 100 * time.Millisecond // TODO put this interval into config
+	heartBeatInterval := 1500 * time.Millisecond // TODO put this interval into config
 	m.heartBeatTimer = time.NewTimer(heartBeatInterval)
 	defer m.heartBeatTimer.Stop()
 
