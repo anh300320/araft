@@ -71,7 +71,7 @@ func NewRaftNode(logger *zap.Logger, config settings.Config) *Raft {
 }
 
 func (r *Raft) RandomElectionTimeout() time.Duration {
-	return time.Duration(r.baseElectionTimoutMs+rand.Intn(150)) * time.Millisecond
+	return time.Duration(r.baseElectionTimoutMs+rand.Intn(500)) * time.Millisecond
 }
 
 func buildPeers(logger *zap.Logger, config settings.Config) []Peer {

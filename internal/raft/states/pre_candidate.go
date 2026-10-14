@@ -82,8 +82,9 @@ func (p *PreCandidate) sendPreVoteRequests() chan protocol.PreVoteResponse {
 			response, err := t.SendPreVote(peerTransport, request)
 			if err != nil {
 				p.raft.Logger().Error(
-					"failed to send pre-vote to",
+					"failed to send pre-vote request to",
 					zap.String("address", peerTransport.GetAddress()),
+					zap.Error(err),
 				)
 			} else {
 				responses <- response
@@ -115,9 +116,11 @@ func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteRespons
 					return true
 				}
 			}
-			if receivedCount >= len(responses) || !ok {
+			if receivedCount >= len(responses) {
 				return false
 			}
+		case <-p.stopSignal:
+			return false
 		case <-electionTimer.C:
 			return false
 		}

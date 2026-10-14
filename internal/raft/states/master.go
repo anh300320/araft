@@ -99,21 +99,24 @@ func (m *Master) HandlePreVote(request protocol.PreVoteRequest) (*raft.ChangeSta
 }
 
 func (m *Master) maintainHeartBeat() {
-	heartBeatInterval := 1500 * time.Millisecond // TODO put this interval into config
-	m.heartBeatTimer = time.NewTimer(heartBeatInterval)
+	heartBeatInterval := m.raft.RandomElectionTimeout() / 3
+	m.heartBeatTimer = time.NewTimer(0) // Set to 0 so the heart beat will be fired immediately
 	defer m.heartBeatTimer.Stop()
 
+	broadcastResultChan := make(chan broadcastResult)
+
 	for {
-		broadcastResultChan := m.broadcastHeartBeat()
-		for !m.isRunning {
-			select {
-			case broadcastResult := <-broadcastResultChan:
-				m.handleHeartBeatResponse(broadcastResult.resp)
-			case <-m.heartBeatTimer.C:
-				m.heartBeatTimer.Reset(heartBeatInterval)
-			case <-m.stopSignal:
-				return
+		select {
+		case <-m.heartBeatTimer.C:
+			m.heartBeatTimer.Reset(heartBeatInterval)
+			broadcastResultChan = m.broadcastHeartBeat()
+		case r := <-broadcastResultChan:
+			if r.err != nil {
+				continue
 			}
+			m.handleHeartBeatResponse(r.resp)
+		case <-m.stopSignal:
+			return
 		}
 	}
 }
@@ -128,7 +131,7 @@ func (m *Master) handleHeartBeatResponse(response protocol.AppendEntriesResponse
 		}
 		m.transition <- &raft.ChangeStateEvent{
 			NextState: nextState,
-			Term:      m.raft.GetCurrentTerm(),
+			Term:      response.Term,
 		}
 	}
 }
@@ -150,7 +153,7 @@ func (m *Master) broadcastHeartBeat() chan broadcastResult {
 		LeaderCommitIndex: m.raft.GetCommitIndex(),
 		LogEntry:          make([]common.LogEntry, 0),
 	}
-	broadcastResultChan := make(chan broadcastResult, len(peers))
+	broadcastResultChan := make(chan broadcastResult, len(m.raft.GetPeers()))
 	var wg sync.WaitGroup
 	for _, peer := range peers {
 		wg.Add(1)
@@ -186,8 +189,8 @@ func (m *Master) HandleClientAppendEntry(request protocol.ClientAppendEntryReque
 	defer timeoutTimer.Stop()
 
 	receivedCount := 0
-	successCount := 1
-	for receivedCount < len(m.followers) && successCount >= common.GetMajorityCount(len(m.followers)+1) {
+	grantedCount := 1
+	for receivedCount < len(m.followers) && grantedCount >= common.GetMajorityCount(len(m.followers)+1) {
 		select {
 		case broadcastResult := <-broadcastResultChan:
 			receivedCount += 1
@@ -196,7 +199,7 @@ func (m *Master) HandleClientAppendEntry(request protocol.ClientAppendEntryReque
 				continue
 			}
 			m.handleAppendEntriesResponse(broadcastResult.followerID, broadcastResult.resp)
-			successCount += 1
+			grantedCount += 1
 		case <-timeoutTimer.C:
 			return protocol.ClientAppendEntryResponse{
 				IsSucceeded: false,
