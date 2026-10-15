@@ -14,6 +14,7 @@ func NewRaftNode(logger *zap.Logger, configPath string) *raft.Raft {
 	}
 
 	newNode := raft.NewRaftNode(logger, appConfig)
-	follower := states.NewFollower(newNode, appConfig)
-	return follower
+	follower := states.NewFollower(newNode)
+	newNode.UpdateState(follower)
+	return newNode
 }

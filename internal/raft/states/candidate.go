@@ -20,13 +20,21 @@ type Candidate struct {
 	stopSignal chan struct{}
 }
 
+func NewCandidate(r *raft.Raft) *Candidate {
+	return &Candidate{
+		raft:       r,
+		isRunning:  false,
+		transition: make(chan *raft.ChangeStateEvent),
+		stopSignal: make(chan struct{}),
+	}
+}
+
 func (c *Candidate) Run() {
 	c.isRunning = true
 	go c.run()
 }
 
 func (c *Candidate) run() {
-	// FIXME: split brain issue, there are cases where 2 master exist at the same time
 	defer close(c.transition)
 	c.electionTimer = time.NewTimer(c.raft.RandomElectionTimeout())
 
@@ -34,15 +42,9 @@ func (c *Candidate) run() {
 	var nextState raft.State
 	nextTerm := c.raft.GetCurrentTerm()
 	if c.promoteToMaster(responses) {
-		nextState = &Master{
-			raft:       c.raft,
-			transition: make(chan *raft.ChangeStateEvent),
-		}
+		nextState = NewMaster(c.raft)
 	} else {
-		nextState = &Candidate{
-			raft:       c.raft,
-			transition: make(chan *raft.ChangeStateEvent),
-		}
+		nextState = NewCandidate(c.raft)
 		nextTerm += 1
 	}
 	c.transition <- &raft.ChangeStateEvent{
@@ -133,12 +135,7 @@ func (c *Candidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (
 		LastLogTerm:  lastLogEntry.Term,
 	}
 	if c.raft.GetCurrentTerm() <= request.Term {
-		nextState := &Follower{
-			raft:            c.raft,
-			transition:      make(chan *raft.ChangeStateEvent),
-			timerResetEvent: make(chan struct{}),
-			stopSignal:      make(chan struct{}),
-		}
+		nextState := NewFollower(c.raft)
 		return &raft.ChangeStateEvent{
 			NextState: nextState,
 			Term:      request.Term,
@@ -164,12 +161,7 @@ func (c *Candidate) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateE
 	}
 
 	if request.Term > c.raft.GetCurrentTerm() {
-		nextState := &Follower{
-			raft:            c.raft,
-			isRunning:       false,
-			transition:      make(chan *raft.ChangeStateEvent),
-			timerResetEvent: make(chan struct{}),
-		}
+		nextState := NewFollower(c.raft)
 		return &raft.ChangeStateEvent{
 			NextState: nextState,
 			Term:      request.Term,

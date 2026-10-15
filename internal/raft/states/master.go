@@ -22,13 +22,27 @@ type Master struct {
 	heartBeatTimer *time.Timer
 	isRunning      bool
 
-	nextIndex  []common.LogIndex
-	matchIndex []common.LogIndex
-
 	transition chan *raft.ChangeStateEvent
 	stopSignal chan struct{}
 
 	followers map[common.ServerID]FollowerInfo
+}
+
+func NewMaster(r *raft.Raft) *Master {
+	followers := map[common.ServerID]FollowerInfo{}
+	for _, peer := range r.GetPeers() {
+		followers[peer.GetServerID()] = FollowerInfo{
+			serverID: peer.GetServerID(),
+			synced:   false,
+		}
+	}
+	return &Master{
+		raft:       r,
+		isRunning:  false,
+		transition: make(chan *raft.ChangeStateEvent),
+		stopSignal: make(chan struct{}),
+		followers:  followers,
+	}
 }
 
 func (m *Master) Run() {
@@ -51,12 +65,7 @@ func (m *Master) GetTransition() chan *raft.ChangeStateEvent {
 
 func (m *Master) HandleAppendEntries(request protocol.AppendEntriesRequest) (*raft.ChangeStateEvent, protocol.AppendEntriesResponse, error) {
 	if request.Term > m.raft.GetCurrentTerm() {
-		nextState := &Follower{
-			raft:            m.raft,
-			isRunning:       false,
-			transition:      make(chan *raft.ChangeStateEvent),
-			timerResetEvent: make(chan struct{}),
-		}
+		nextState := NewFollower(m.raft)
 		return &raft.ChangeStateEvent{
 			NextState: nextState,
 			Term:      request.Term,
@@ -82,12 +91,7 @@ func (m *Master) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEven
 	}
 
 	// Reaching here means the Candidate's term is greater than self term.
-	nextState := &Follower{
-		raft:            m.raft,
-		isRunning:       false,
-		transition:      make(chan *raft.ChangeStateEvent),
-		timerResetEvent: make(chan struct{}),
-	}
+	nextState := NewFollower(m.raft)
 	return &raft.ChangeStateEvent{
 		NextState: nextState,
 		Term:      request.Term,
@@ -123,12 +127,7 @@ func (m *Master) maintainHeartBeat() {
 
 func (m *Master) handleHeartBeatResponse(response protocol.AppendEntriesResponse) {
 	if response.Term > m.raft.GetCurrentTerm() {
-		nextState := &Follower{
-			raft:            m.raft,
-			transition:      make(chan *raft.ChangeStateEvent),
-			timerResetEvent: make(chan struct{}),
-			stopSignal:      make(chan struct{}),
-		}
+		nextState := NewFollower(m.raft)
 		m.transition <- &raft.ChangeStateEvent{
 			NextState: nextState,
 			Term:      response.Term,

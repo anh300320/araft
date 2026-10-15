@@ -19,6 +19,15 @@ type PreCandidate struct {
 	stopSignal chan struct{}
 }
 
+func NewPreCandidate(r *raft.Raft) *PreCandidate {
+	return &PreCandidate{
+		raft:       r,
+		isRunning:  false,
+		transition: make(chan *raft.ChangeStateEvent),
+		stopSignal: make(chan struct{}),
+	}
+}
+
 func (p *PreCandidate) Run() {
 	p.isRunning = true
 	go p.run()
@@ -32,19 +41,10 @@ func (p *PreCandidate) run() {
 	var nextState raft.State
 	nextTerm := p.raft.GetCurrentTerm()
 	if p.promoteToCandidate(responses) {
-		nextState = &Candidate{
-			raft:       p.raft,
-			transition: make(chan *raft.ChangeStateEvent),
-			stopSignal: make(chan struct{}),
-		}
+		nextState = NewCandidate(p.raft)
 		nextTerm = p.getHypotheticalTerm()
 	} else {
-		nextState = &Follower{
-			raft:            p.raft,
-			transition:      make(chan *raft.ChangeStateEvent),
-			timerResetEvent: make(chan struct{}),
-			stopSignal:      make(chan struct{}),
-		}
+		nextState = NewFollower(p.raft)
 	}
 	p.transition <- &raft.ChangeStateEvent{
 		NextState: nextState,
@@ -137,13 +137,8 @@ func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest
 	}
 	if p.raft.GetCurrentTerm() <= request.Term {
 		return &raft.ChangeStateEvent{
-			NextState: &Follower{
-				raft:            p.raft,
-				transition:      make(chan *raft.ChangeStateEvent),
-				timerResetEvent: make(chan struct{}),
-				stopSignal:      make(chan struct{}),
-			},
-			Term: request.Term,
+			NextState: NewFollower(p.raft),
+			Term:      request.Term,
 		}, response, nil
 	}
 
@@ -160,12 +155,7 @@ func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (*raft.ChangeSta
 
 	// Revert to follower if the Candidate's term >= self term.
 	if request.Term > p.raft.GetCurrentTerm() {
-		nextState := &Follower{
-			raft:            p.raft,
-			transition:      make(chan *raft.ChangeStateEvent),
-			timerResetEvent: make(chan struct{}),
-			stopSignal:      make(chan struct{}),
-		}
+		nextState := NewFollower(p.raft)
 		return &raft.ChangeStateEvent{
 			NextState: nextState,
 			Term:      request.Term,

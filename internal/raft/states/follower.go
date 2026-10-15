@@ -5,7 +5,6 @@ import (
 
 	"github.com/anh300320/araft/internal/raft"
 	"github.com/anh300320/araft/internal/raft/protocol"
-	"github.com/anh300320/araft/internal/raft/settings"
 	"go.uber.org/zap"
 )
 
@@ -20,17 +19,14 @@ type Follower struct {
 	stopSignal      chan struct{}
 }
 
-func NewFollower(r *raft.Raft, config settings.Config) *raft.Raft {
-	followerState := &Follower{
+func NewFollower(r *raft.Raft) *Follower {
+	return &Follower{
 		raft:            r,
-		timer:           nil,
 		isRunning:       false,
 		transition:      make(chan *raft.ChangeStateEvent),
 		timerResetEvent: make(chan struct{}),
 		stopSignal:      make(chan struct{}),
 	}
-	r.UpdateState(followerState)
-	return r
 }
 
 func (f *Follower) Run() {
@@ -96,13 +92,8 @@ func (f *Follower) HandleAppendEntries(request protocol.AppendEntriesRequest) (*
 	}
 	if f.raft.GetCurrentTerm() < request.Term {
 		return &raft.ChangeStateEvent{
-			NextState: &Follower{
-				raft:            f.raft,
-				transition:      make(chan *raft.ChangeStateEvent),
-				timerResetEvent: make(chan struct{}),
-				stopSignal:      make(chan struct{}),
-			},
-			Term: request.Term,
+			NextState: NewFollower(f.raft),
+			Term:      request.Term,
 		}, response, nil
 	}
 
@@ -129,13 +120,8 @@ func (f *Follower) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEv
 
 	if request.Term > f.raft.GetCurrentTerm() {
 		return &raft.ChangeStateEvent{
-			Term: request.Term,
-			NextState: &Follower{
-				raft:            f.raft,
-				transition:      make(chan *raft.ChangeStateEvent),
-				timerResetEvent: make(chan struct{}),
-				stopSignal:      make(chan struct{}),
-			},
+			Term:      request.Term,
+			NextState: NewFollower(f.raft),
 		}, protocol.VoteResponse{}, nil
 	}
 
