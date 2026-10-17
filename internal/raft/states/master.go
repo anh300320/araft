@@ -24,6 +24,7 @@ type Master struct {
 
 	transition chan *raft.ChangeStateEvent
 	stopSignal chan struct{}
+	done       chan struct{}
 
 	followers map[common.ServerID]FollowerInfo
 }
@@ -41,6 +42,7 @@ func NewMaster(r *raft.Raft) *Master {
 		isRunning:  false,
 		transition: make(chan *raft.ChangeStateEvent),
 		stopSignal: make(chan struct{}),
+		done:       make(chan struct{}),
 		followers:  followers,
 	}
 }
@@ -52,6 +54,7 @@ func (m *Master) Run() {
 
 func (m *Master) run() {
 	defer close(m.transition)
+	defer close(m.done)
 	m.maintainHeartBeat()
 }
 
@@ -211,9 +214,9 @@ func (m *Master) HandleClientAppendEntry(request protocol.ClientAppendEntryReque
 }
 
 func (m *Master) Stop() {
-	m.stopSignal <- struct{}{}
+	close(m.stopSignal)
+	<-m.done
 	m.isRunning = false
-	defer close(m.stopSignal)
 }
 
 type FollowerInfo struct {

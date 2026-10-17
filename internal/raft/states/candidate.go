@@ -18,6 +18,7 @@ type Candidate struct {
 
 	transition chan *raft.ChangeStateEvent
 	stopSignal chan struct{}
+	done       chan struct{}
 }
 
 func NewCandidate(r *raft.Raft) *Candidate {
@@ -26,6 +27,7 @@ func NewCandidate(r *raft.Raft) *Candidate {
 		isRunning:  false,
 		transition: make(chan *raft.ChangeStateEvent),
 		stopSignal: make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 }
 
@@ -35,6 +37,7 @@ func (c *Candidate) Run() {
 }
 
 func (c *Candidate) run() {
+	defer close(c.done)
 	defer close(c.transition)
 	c.electionTimer = time.NewTimer(c.raft.RandomElectionTimeout())
 
@@ -196,7 +199,7 @@ func (c *Candidate) GetTransition() chan *raft.ChangeStateEvent {
 }
 
 func (c *Candidate) Stop() {
-	c.stopSignal <- struct{}{}
+	close(c.stopSignal)
+	<-c.done
 	c.isRunning = false
-	defer close(c.stopSignal)
 }

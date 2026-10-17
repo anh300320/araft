@@ -17,6 +17,7 @@ type Follower struct {
 	transition      chan *raft.ChangeStateEvent
 	timerResetEvent chan struct{}
 	stopSignal      chan struct{}
+	done            chan struct{}
 }
 
 func NewFollower(r *raft.Raft) *Follower {
@@ -26,6 +27,7 @@ func NewFollower(r *raft.Raft) *Follower {
 		transition:      make(chan *raft.ChangeStateEvent),
 		timerResetEvent: make(chan struct{}),
 		stopSignal:      make(chan struct{}),
+		done:            make(chan struct{}),
 	}
 }
 
@@ -37,6 +39,7 @@ func (f *Follower) Run() {
 func (f *Follower) run() {
 	defer close(f.timerResetEvent)
 	defer close(f.transition)
+	defer close(f.done)
 	defer func() {
 		f.isRunning = false
 	}()
@@ -186,7 +189,7 @@ func (f *Follower) resetElectionTimer() {
 }
 
 func (f *Follower) Stop() {
-	f.stopSignal <- struct{}{}
+	close(f.stopSignal)
+	<-f.done
 	f.isRunning = false
-	defer close(f.stopSignal)
 }

@@ -17,6 +17,7 @@ type PreCandidate struct {
 
 	transition chan *raft.ChangeStateEvent
 	stopSignal chan struct{}
+	done       chan struct{}
 }
 
 func NewPreCandidate(r *raft.Raft) *PreCandidate {
@@ -25,6 +26,7 @@ func NewPreCandidate(r *raft.Raft) *PreCandidate {
 		isRunning:  false,
 		transition: make(chan *raft.ChangeStateEvent),
 		stopSignal: make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 }
 
@@ -204,8 +206,8 @@ func (p *PreCandidate) getHypotheticalTerm() common.Term {
 
 func (p *PreCandidate) Stop() {
 	p.raft.Logger().Info("send stop signal to pre-candidate")
-	p.stopSignal <- struct{}{}
-	p.raft.Logger().Info("send stop signal to pre-candidate successfully")
+	close(p.stopSignal)
+	<-p.done
+	p.raft.Logger().Info("pre-candidate stopped successfully")
 	p.isRunning = false
-	defer close(p.stopSignal)
 }
