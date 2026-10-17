@@ -71,7 +71,7 @@ func NewRaftNode(logger *zap.Logger, config settings.Config) *Raft {
 }
 
 func (r *Raft) RandomElectionTimeout() time.Duration {
-	return time.Duration(r.baseElectionTimoutMs+rand.Intn(150)) * time.Millisecond
+	return time.Duration(r.baseElectionTimoutMs+rand.Intn(500)) * time.Millisecond
 }
 
 func buildPeers(logger *zap.Logger, config settings.Config) []Peer {
@@ -99,6 +99,10 @@ func (r *Raft) Run() {
 		panic(err) // TODO check?
 	}
 	defer close(eventChan)
+
+	if !r.state.IsRunning() {
+		r.state.Run()
+	}
 
 	for {
 		select {
@@ -169,38 +173,35 @@ func (r *Raft) UpdateState(nextState State) error {
 		r.state.Stop()
 	}
 	r.state = nextState
-	r.state.Run()
 	return nil
 }
 
-func (r *Raft) HandleChangeState(c *ChangeStateEvent) {
-	err := r.UpdateState(c.NextState)
-	if err != nil {
-		panic(err)
-	}
-	err = func() error {
-		err := r.setTerm(c.Term)
-		if err != nil {
-			return err
-		}
-		r.votedFor = c.VotedFor
-		return r.flushState()
-	}()
-	if err != nil {
-		r.Logger().Error("failed to update node state", zap.Error(err))
-		panic(err)
-	}
-}
-
-func (r *Raft) setTerm(newTerm common.Term) error {
-	if newTerm < r.currentTerm {
+func (r *Raft) HandleChangeState(c *ChangeStateEvent) error {
+	if r.currentTerm > c.Term {
 		return fmt.Errorf(
-			"failed to assign new term, the new term should be greater than the current term. currentTerm: %d, newTerm: %d",
-			r.currentTerm, newTerm,
+			"failed to assign new term, the new term should be greater than or equal to the current term. currentTerm: %d, newTerm: %d",
+			r.currentTerm, c.Term,
 		)
 	}
-	r.currentTerm = newTerm
-	return nil
+
+	err := r.UpdateState(c.NextState)
+	if err != nil {
+		return err
+	}
+
+	if r.currentTerm == c.Term {
+		if r.IsAbleToVoteFor(r.votedFor) {
+			c.VotedFor = r.votedFor
+		}
+	}
+
+	if r.currentTerm < c.Term {
+		r.currentTerm = c.Term
+		r.votedFor = c.VotedFor
+	}
+
+	r.state.Run()
+	return r.flushState()
 }
 
 func (r *Raft) flushState() error {

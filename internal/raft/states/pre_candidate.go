@@ -17,6 +17,17 @@ type PreCandidate struct {
 
 	transition chan *raft.ChangeStateEvent
 	stopSignal chan struct{}
+	done       chan struct{}
+}
+
+func NewPreCandidate(r *raft.Raft) *PreCandidate {
+	return &PreCandidate{
+		raft:       r,
+		isRunning:  false,
+		transition: make(chan *raft.ChangeStateEvent),
+		stopSignal: make(chan struct{}),
+		done:       make(chan struct{}),
+	}
 }
 
 func (p *PreCandidate) Run() {
@@ -32,20 +43,10 @@ func (p *PreCandidate) run() {
 	var nextState raft.State
 	nextTerm := p.raft.GetCurrentTerm()
 	if p.promoteToCandidate(responses) {
-		nextState = &Candidate{
-			raft:       p.raft,
-			transition: make(chan *raft.ChangeStateEvent),
-			stopSignal: make(chan struct{}),
-		}
-		nextTerm += 1
+		nextState = NewCandidate(p.raft)
+		nextTerm = p.getHypotheticalTerm()
 	} else {
-		nextState = &Follower{
-			raft:            p.raft,
-			isRunning:       false,
-			transition:      make(chan *raft.ChangeStateEvent),
-			timerResetEvent: make(chan struct{}),
-			stopSignal:      make(chan struct{}),
-		}
+		nextState = NewFollower(p.raft)
 	}
 	p.transition <- &raft.ChangeStateEvent{
 		NextState: nextState,
@@ -83,8 +84,9 @@ func (p *PreCandidate) sendPreVoteRequests() chan protocol.PreVoteResponse {
 			response, err := t.SendPreVote(peerTransport, request)
 			if err != nil {
 				p.raft.Logger().Error(
-					"failed to send pre-vote to",
+					"failed to send pre-vote request to",
 					zap.String("address", peerTransport.GetAddress()),
+					zap.Error(err),
 				)
 			} else {
 				responses <- response
@@ -112,13 +114,15 @@ func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteRespons
 			receivedCount += 1
 			if resp.Granted {
 				successCount += 1
-				if successCount >= common.GetMajorityCount(len(responses)+1) {
+				if successCount >= common.GetMajorityCount(len(p.raft.GetPeers())+1) {
 					return true
 				}
 			}
-			if receivedCount >= len(responses) || !ok {
+			if receivedCount >= len(responses) {
 				return false
 			}
+		case <-p.stopSignal:
+			return false
 		case <-electionTimer.C:
 			return false
 		}
@@ -126,7 +130,21 @@ func (p *PreCandidate) promoteToCandidate(responses chan protocol.PreVoteRespons
 }
 
 func (p *PreCandidate) HandleAppendEntries(request protocol.AppendEntriesRequest) (*raft.ChangeStateEvent, protocol.AppendEntriesResponse, error) {
-	return nil, protocol.AppendEntriesResponse{IsSucceeded: true}, nil
+	lastLogEntry := p.raft.GetLatestLogEntry()
+	response := protocol.AppendEntriesResponse{
+		Term:         p.raft.GetCurrentTerm(),
+		IsSucceeded:  false,
+		LastLogIndex: lastLogEntry.Index,
+		LastLogTerm:  lastLogEntry.Term,
+	}
+	if p.raft.GetCurrentTerm() <= request.Term {
+		return &raft.ChangeStateEvent{
+			NextState: NewFollower(p.raft),
+			Term:      request.Term,
+		}, response, nil
+	}
+
+	return nil, response, nil
 }
 
 func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEvent, protocol.VoteResponse, error) {
@@ -139,12 +157,7 @@ func (p *PreCandidate) HandleVote(request protocol.VoteRequest) (*raft.ChangeSta
 
 	// Revert to follower if the Candidate's term >= self term.
 	if request.Term > p.raft.GetCurrentTerm() {
-		nextState := &Follower{
-			raft:            p.raft,
-			transition:      make(chan *raft.ChangeStateEvent),
-			timerResetEvent: make(chan struct{}),
-			stopSignal:      make(chan struct{}),
-		}
+		nextState := NewFollower(p.raft)
 		return &raft.ChangeStateEvent{
 			NextState: nextState,
 			Term:      request.Term,
@@ -193,8 +206,8 @@ func (p *PreCandidate) getHypotheticalTerm() common.Term {
 
 func (p *PreCandidate) Stop() {
 	p.raft.Logger().Info("send stop signal to pre-candidate")
-	p.stopSignal <- struct{}{}
-	p.raft.Logger().Info("send stop signal to pre-candidate successfully")
+	close(p.stopSignal)
+	<-p.done
+	p.raft.Logger().Info("pre-candidate stopped successfully")
 	p.isRunning = false
-	defer close(p.stopSignal)
 }

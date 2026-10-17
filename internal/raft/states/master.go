@@ -22,13 +22,29 @@ type Master struct {
 	heartBeatTimer *time.Timer
 	isRunning      bool
 
-	nextIndex  []common.LogIndex
-	matchIndex []common.LogIndex
-
 	transition chan *raft.ChangeStateEvent
 	stopSignal chan struct{}
+	done       chan struct{}
 
 	followers map[common.ServerID]FollowerInfo
+}
+
+func NewMaster(r *raft.Raft) *Master {
+	followers := map[common.ServerID]FollowerInfo{}
+	for _, peer := range r.GetPeers() {
+		followers[peer.GetServerID()] = FollowerInfo{
+			serverID: peer.GetServerID(),
+			synced:   false,
+		}
+	}
+	return &Master{
+		raft:       r,
+		isRunning:  false,
+		transition: make(chan *raft.ChangeStateEvent),
+		stopSignal: make(chan struct{}),
+		done:       make(chan struct{}),
+		followers:  followers,
+	}
 }
 
 func (m *Master) Run() {
@@ -38,6 +54,7 @@ func (m *Master) Run() {
 
 func (m *Master) run() {
 	defer close(m.transition)
+	defer close(m.done)
 	m.maintainHeartBeat()
 }
 
@@ -51,12 +68,7 @@ func (m *Master) GetTransition() chan *raft.ChangeStateEvent {
 
 func (m *Master) HandleAppendEntries(request protocol.AppendEntriesRequest) (*raft.ChangeStateEvent, protocol.AppendEntriesResponse, error) {
 	if request.Term > m.raft.GetCurrentTerm() {
-		nextState := &Follower{
-			raft:            m.raft,
-			isRunning:       false,
-			transition:      make(chan *raft.ChangeStateEvent),
-			timerResetEvent: make(chan struct{}),
-		}
+		nextState := NewFollower(m.raft)
 		return &raft.ChangeStateEvent{
 			NextState: nextState,
 			Term:      request.Term,
@@ -64,7 +76,7 @@ func (m *Master) HandleAppendEntries(request protocol.AppendEntriesRequest) (*ra
 	}
 
 	if request.Term == m.raft.GetCurrentTerm() {
-		m.raft.Logger().Warn("detected another leader with the same term", zap.Int64("peer_node_id", int64(int(request.MasterID))))
+		m.raft.Logger().Fatal("detected another leader with the same term", zap.Int64("peer_node_id", int64(int(request.MasterID))))
 	}
 
 	return nil, protocol.AppendEntriesResponse{
@@ -82,12 +94,7 @@ func (m *Master) HandleVote(request protocol.VoteRequest) (*raft.ChangeStateEven
 	}
 
 	// Reaching here means the Candidate's term is greater than self term.
-	nextState := &Follower{
-		raft:            m.raft,
-		isRunning:       false,
-		transition:      make(chan *raft.ChangeStateEvent),
-		timerResetEvent: make(chan struct{}),
-	}
+	nextState := NewFollower(m.raft)
 	return &raft.ChangeStateEvent{
 		NextState: nextState,
 		Term:      request.Term,
@@ -99,36 +106,34 @@ func (m *Master) HandlePreVote(request protocol.PreVoteRequest) (*raft.ChangeSta
 }
 
 func (m *Master) maintainHeartBeat() {
-	heartBeatInterval := 100 * time.Millisecond // TODO put this interval into config
-	m.heartBeatTimer = time.NewTimer(heartBeatInterval)
+	heartBeatInterval := m.raft.RandomElectionTimeout() / 3
+	m.heartBeatTimer = time.NewTimer(0) // Set to 0 so the heart beat will be fired immediately
 	defer m.heartBeatTimer.Stop()
 
+	broadcastResultChan := make(chan broadcastResult)
+
 	for {
-		broadcastResultChan := m.broadcastHeartBeat()
-		for !m.isRunning {
-			select {
-			case broadcastResult := <-broadcastResultChan:
-				m.handleHeartBeatResponse(broadcastResult.resp)
-			case <-m.heartBeatTimer.C:
-				m.heartBeatTimer.Reset(heartBeatInterval)
-			case <-m.stopSignal:
-				return
+		select {
+		case <-m.heartBeatTimer.C:
+			m.heartBeatTimer.Reset(heartBeatInterval)
+			broadcastResultChan = m.broadcastHeartBeat()
+		case r := <-broadcastResultChan:
+			if r.err != nil {
+				continue
 			}
+			m.handleHeartBeatResponse(r.resp)
+		case <-m.stopSignal:
+			return
 		}
 	}
 }
 
 func (m *Master) handleHeartBeatResponse(response protocol.AppendEntriesResponse) {
 	if response.Term > m.raft.GetCurrentTerm() {
-		nextState := &Follower{
-			raft:            m.raft,
-			transition:      make(chan *raft.ChangeStateEvent),
-			timerResetEvent: make(chan struct{}),
-			stopSignal:      make(chan struct{}),
-		}
+		nextState := NewFollower(m.raft)
 		m.transition <- &raft.ChangeStateEvent{
 			NextState: nextState,
-			Term:      m.raft.GetCurrentTerm(),
+			Term:      response.Term,
 		}
 	}
 }
@@ -150,7 +155,7 @@ func (m *Master) broadcastHeartBeat() chan broadcastResult {
 		LeaderCommitIndex: m.raft.GetCommitIndex(),
 		LogEntry:          make([]common.LogEntry, 0),
 	}
-	broadcastResultChan := make(chan broadcastResult, len(peers))
+	broadcastResultChan := make(chan broadcastResult, len(m.raft.GetPeers()))
 	var wg sync.WaitGroup
 	for _, peer := range peers {
 		wg.Add(1)
@@ -186,8 +191,8 @@ func (m *Master) HandleClientAppendEntry(request protocol.ClientAppendEntryReque
 	defer timeoutTimer.Stop()
 
 	receivedCount := 0
-	successCount := 1
-	for receivedCount < len(m.followers) && successCount >= common.GetMajorityCount(len(m.followers)+1) {
+	grantedCount := 1
+	for receivedCount < len(m.followers) && grantedCount >= common.GetMajorityCount(len(m.followers)+1) {
 		select {
 		case broadcastResult := <-broadcastResultChan:
 			receivedCount += 1
@@ -196,7 +201,7 @@ func (m *Master) HandleClientAppendEntry(request protocol.ClientAppendEntryReque
 				continue
 			}
 			m.handleAppendEntriesResponse(broadcastResult.followerID, broadcastResult.resp)
-			successCount += 1
+			grantedCount += 1
 		case <-timeoutTimer.C:
 			return protocol.ClientAppendEntryResponse{
 				IsSucceeded: false,
@@ -209,9 +214,9 @@ func (m *Master) HandleClientAppendEntry(request protocol.ClientAppendEntryReque
 }
 
 func (m *Master) Stop() {
-	m.stopSignal <- struct{}{}
+	close(m.stopSignal)
+	<-m.done
 	m.isRunning = false
-	defer close(m.stopSignal)
 }
 
 type FollowerInfo struct {
